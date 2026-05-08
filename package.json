@@ -1,0 +1,37 @@
+{
+  "name": "ai-design",
+  "version": "0.1.0",
+  "description": "AI + 设计师协作客户端 — 左聊天、右交互面板、AI 写 HTML 即所见",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,magenta \"pnpm dev:server\" \"pnpm dev:client\"",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:client": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0",
+    "@hono/node-server": "^2.0.1",
+    "dexie": "^4.0.10",
+    "dotenv": "^17.4.2",
+    "hono": "^4.12.18",
+    "jszip": "^3.10.1",
+    "nanoid": "^5.0.9",
+    "openai": "^4.79.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}

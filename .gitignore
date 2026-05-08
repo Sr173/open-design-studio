@@ -1,0 +1,15 @@
+node_modules
+dist
+.env
+.env.local
+*.local
+
+.DS_Store
+*.log
+
+# IDE
+.idea
+.vscode
+
+# tsc 临时产物
+**/*.js.map
