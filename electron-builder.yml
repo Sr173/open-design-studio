@@ -1,0 +1,55 @@
+appId: com.opendesignstudio.app
+productName: Open Design Studio
+
+# 打包前先跑 Vite + esbuild build,产物在 dist/ 和 dist-electron/
+directories:
+  output: release
+  buildResources: build
+
+# 包进 .app 的文件 — 极简,只放运行时必须
+files:
+  - dist                       # vite 产物(renderer)
+  - dist-electron              # esbuild 产物(main.mjs / preload.cjs / skill md / __aid_inject.js)
+  - package.json               # main 字段指向 dist-electron/main.mjs
+  - "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,readme}"
+  - "!**/node_modules/*/{*.d.ts,*.bak}"
+  - "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
+  - "!**/node_modules/.cache"
+  - "!**/.{idea,git,DS_Store}"
+  - "!**/{tsconfig.json,tslint.json,.eslintrc,.eslintignore,.prettierrc}"
+
+# native 模块(keytar / chokidar fsevents)需要原生 binding,electron-builder 自动 rebuild
+asarUnpack:
+  - "**/node_modules/keytar/**/*"
+
+# ───────── macOS DMG ─────────
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  # 没买 Apple Developer 证书 → 走 ad-hoc 签名(用户首次打开仍需右键 Open)
+  identity: null
+  # 关闭强制 sandbox(我们需要文件系统访问)
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  # 不要做 notarization(没证书)
+  notarize: false
+
+# dmg 外观 — 没自定义图,electron-builder 默认即可
+dmg:
+  title: ${productName} ${version}
+  icon: null
+  background: null
+  iconSize: 100
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# afterPack hook 可以用来 strip 不必要的 locale 等,先不用

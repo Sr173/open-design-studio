@@ -32,7 +32,11 @@
     "electron:build:watch": "node electron/build.mjs --watch",
     "electron:dev": "concurrently -n vite,esbuild,electron -c magenta,yellow,cyan \"pnpm dev:client\" \"pnpm electron:build:watch\" \"wait-on http://localhost:5173 dist-electron/main.mjs && electron dist-electron/main.mjs\"",
     "electron:start": "electron dist-electron/main.mjs",
-    "reprocess-aids": "tsx scripts/reprocess-aids.mjs"
+    "reprocess-aids": "tsx scripts/reprocess-aids.mjs",
+    "dist:prebuild": "tsc --noEmit && vite build && node electron/build.mjs",
+    "dist:mac": "pnpm dist:prebuild && electron-builder --mac --arm64 --x64",
+    "dist:mac:arm64": "pnpm dist:prebuild && electron-builder --mac --arm64",
+    "dist:mac:x64": "pnpm dist:prebuild && electron-builder --mac --x64"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",
