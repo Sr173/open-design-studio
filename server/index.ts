@@ -22,6 +22,7 @@ import {
   execServerTool,
   rehydrateServerToolResults,
   dropOrphanServerToolUses,
+  compactOldToolResults,
 } from './llm/serverTools.js';
 import type {
   Block,
@@ -180,6 +181,17 @@ app.post('/api/llm/chat', async (c) => {
     let history = rehydrateServerToolResults(
       dropOrphanServerToolUses(body.messages)
     );
+    // v6.1 + Sprint A.3:压缩老的、超长的 tool_result(read_file / list / search 等)→ stub
+    // 减少 input token 浪费,提升 attention 聚焦,降低 Opus 4.7 单轮 cost
+    {
+      const r = compactOldToolResults(history);
+      history = r.messages;
+      if (r.compacted > 0) {
+        console.log(
+          `[compact] elided ${r.compacted} old/large tool_result(s), saved ~${(r.bytesSaved / 1024).toFixed(1)}KB`
+        );
+      }
+    }
 
     // tools = client 注册 + server-managed
     const allTools: ChatToolDef[] = [
@@ -188,7 +200,9 @@ app.post('/api/llm/chat', async (c) => {
     ];
 
     const system = buildSystemPrompt();
-    const maxTokens = body.maxTokens ?? 16384;
+    // Opus 4.7 输出硬上限 128k(实测确认 200k+ 会被 Anthropic 直接拒)
+    // 这是 cap 不是预分配,实际只按真生成的 token 计费
+    const maxTokens = body.maxTokens ?? 128_000;
 
     // === Server-managed tool loop ===
     // 一轮 LLM → 若 stop=tool_use 且全 server-managed,server 内部跑工具继续;

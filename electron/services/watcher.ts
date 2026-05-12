@@ -7,6 +7,7 @@
 import chokidar, { type FSWatcher } from 'chokidar';
 import path from 'node:path';
 import type { WebContents } from 'electron';
+import { designRoot } from './fs.js';
 
 export type FsChangeEvent = {
   rootPath: string;
@@ -39,16 +40,12 @@ export function markAIWrite(rootPath: string, relPath: string) {
 
 export function startWatcher(rootPath: string, webContents: WebContents): void {
   stopWatcher(rootPath);
-  const w = chokidar.watch(rootPath, {
+  // v6.0g:只 watch <rootPath>/.design/ — 用户原项目代码改动跟我们无关
+  const watchTarget = designRoot(rootPath);
+  const w = chokidar.watch(watchTarget, {
     ignored: (filePath) => {
       const base = path.basename(filePath);
       return (
-        base === 'node_modules' ||
-        base === '.git' ||
-        base === 'dist' ||
-        base === 'dist-electron' ||
-        base === '.next' ||
-        base === '.cache' ||
         base === '.DS_Store' ||
         /\.swp$/.test(base) // vim
       );
@@ -59,7 +56,8 @@ export function startWatcher(rootPath: string, webContents: WebContents): void {
   });
 
   const emit = (kind: FsChangeEvent['kind'], abs: string) => {
-    const rel = path.relative(rootPath, abs).split(path.sep).join('/');
+    // rel 相对 .design/ — 跟 AI 视角一致
+    const rel = path.relative(watchTarget, abs).split(path.sep).join('/');
     if (!rel || rel.startsWith('..')) return;
     if (shouldSuppress(rootPath, rel)) return;
     const ev: FsChangeEvent = {
@@ -81,7 +79,7 @@ export function startWatcher(rootPath: string, webContents: WebContents): void {
   w.on('error', (err) => console.error('[watcher]', err));
 
   watchers.set(rootPath, w);
-  console.log(`[watcher] started ${rootPath}`);
+  console.log(`[watcher] started ${watchTarget}`);
 }
 
 export async function stopWatcher(rootPath: string): Promise<void> {

@@ -53,7 +53,7 @@ async function createWindow() {
 
   if (IS_DEV) {
     await win.loadURL('http://localhost:5173');
-    win.webContents.openDevTools({ mode: 'detach' });
+    // DevTools 不自动开;⌘⌥I 手动呼出
   } else {
     const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
     await win.loadFile(indexPath);

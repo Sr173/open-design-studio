@@ -1,0 +1,721 @@
+<!doctype html>
+/* A · sidebar-companion (保守 · conservative)
+ * 风险梯度:保守 — 沿用三栏惯例,改动最克制,迁移成本最低,天花板也最低。
+ * DNA: 三栏的工程惯例不破,但比例彻底翻过来 — 画布占≥64%,chat 固定 340px,filetree 折叠成 56px icon rail。
+ * Fits: 熟悉 Cursor/VSCode/Linear 三栏心智的设计师,迁移成本几乎 0;chat 始终在视野里,适合"边看 AI 边写"的高频对话用户。
+ * Tradeoff: 固定栏永远吃掉 ~360px,画布拿不到 100%;chat 长期占视野,验稿/演示时不够"画布全感"。
+ */
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>ai-design · A sidebar-companion</title>
+<link rel="stylesheet" href="../../shared/styles.css" />
+<style>
+  /* ───── A 专属布局 ───── */
+  .app {
+    display: grid;
+    grid-template-columns: 56px 1fr 340px;
+    grid-template-rows: 38px 1fr;
+    height: 100vh;
+    background: var(--bg-base);
+  }
+
+  /* 顶部 slim header,横跨全宽 */
+  .topbar {
+    grid-column: 1 / -1;
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 14px;
+    background: var(--bg-base);
+    border-bottom: 1px solid var(--line-hair);
+    font-size: var(--fs-sm);
+    color: var(--fg-2);
+    -webkit-app-region: drag;
+  }
+  .topbar .traffic { display: flex; gap: 7px; margin-right: 6px; }
+  .topbar .traffic span {
+    width: 11px; height: 11px; border-radius: 50%;
+    background: var(--line-mid);
+  }
+  .topbar .traffic span:nth-child(1) { background: #ff6b6b; }
+  .topbar .traffic span:nth-child(2) { background: #ffcc66; }
+  .topbar .traffic span:nth-child(3) { background: #6ec98f; }
+  .topbar .proj-name { font-weight: 600; color: var(--fg-1); }
+  .topbar .crumb {
+    font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-3);
+  }
+  .topbar .crumb .accent { color: var(--accent); }
+  .topbar .right { margin-left: auto; display: flex; gap: 8px; align-items: center; -webkit-app-region: no-drag; }
+
+  /* ───── 左 rail · icon-only,hover 展开 ───── */
+  .rail {
+    background: var(--bg-panel);
+    border-right: 1px solid var(--line-hair);
+    display: flex; flex-direction: column;
+    padding: 8px 0;
+    gap: 2px;
+    overflow: hidden;
+  }
+  .rail-btn {
+    height: 40px; width: 40px;
+    margin: 0 auto;
+    border-radius: var(--r-sm);
+    display: grid; place-items: center;
+    color: var(--fg-3);
+    font-size: 16px;
+    position: relative;
+    transition: background 0.12s, color 0.12s;
+  }
+  .rail-btn:hover { background: var(--bg-elevated); color: var(--fg-1); }
+  .rail-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .rail-btn.active::before {
+    content: "";
+    position: absolute; left: -8px; top: 50%;
+    transform: translateY(-50%);
+    width: 2px; height: 18px;
+    background: var(--accent);
+    border-radius: 0 2px 2px 0;
+  }
+  .rail-btn .badge {
+    position: absolute; top: 4px; right: 4px;
+    min-width: 14px; height: 14px; padding: 0 4px;
+    border-radius: 7px;
+    background: var(--accent);
+    color: #000;
+    font-size: 9px; font-weight: 700;
+    display: grid; place-items: center;
+  }
+  .rail-spacer { flex: 1; }
+
+  /* ───── 中:画布区(主角)───── */
+  .center {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    background: var(--bg-base);
+    overflow: hidden;
+    min-width: 0;
+  }
+  .center-toolbar {
+    height: 44px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--line-hair);
+  }
+  .mode-tabs {
+    display: flex; gap: 2px;
+    background: var(--bg-panel);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm);
+    padding: 2px;
+  }
+  .mode-tab {
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: var(--fs-xs);
+    color: var(--fg-3);
+    display: flex; align-items: center; gap: 5px;
+    font-weight: 500;
+  }
+  .mode-tab.active {
+    background: var(--bg-elevated);
+    color: var(--fg-1);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset;
+  }
+  .mode-tab .kbd { margin-left: 3px; }
+
+  .viewport-pills {
+    display: flex; gap: 4px;
+    margin-left: 8px;
+    padding-left: 12px;
+    border-left: 1px solid var(--line-hair);
+  }
+  .vp {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: var(--fs-xs);
+    color: var(--fg-3);
+    font-family: var(--font-mono);
+  }
+  .vp.active { background: var(--bg-elevated); color: var(--fg-1); }
+
+  .center-toolbar .grow { flex: 1; }
+  .center-toolbar .file-tab {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--fg-2);
+    padding: 4px 10px;
+    border-radius: var(--r-sm);
+    background: var(--bg-panel);
+    border: 1px solid var(--line-soft);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .center-toolbar .icon-btn {
+    width: 28px; height: 28px;
+    display: grid; place-items: center;
+    border-radius: var(--r-sm);
+    color: var(--fg-3);
+  }
+  .center-toolbar .icon-btn:hover { background: var(--bg-elevated); color: var(--fg-1); }
+
+  /* 画布本体 */
+  .canvas-wrap {
+    padding: 16px 18px 18px;
+    overflow: auto;
+    display: flex; align-items: stretch; justify-content: center;
+  }
+  .canvas-frame {
+    flex: 1;
+    max-width: 1400px;
+  }
+  .canvas-iframe-stub {
+    width: 100%; height: 100%;
+    border: 0;
+    display: block;
+  }
+
+  /* 变体切换条(底部)*/
+  .variant-bar {
+    height: 48px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 18px;
+    border-top: 1px solid var(--line-hair);
+    background: var(--bg-base);
+  }
+  .variant-bar .label {
+    font-size: var(--fs-xs);
+    color: var(--fg-3);
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-right: 4px;
+  }
+  .variant-chip {
+    padding: 6px 12px;
+    border-radius: var(--r-sm);
+    background: var(--bg-panel);
+    border: 1px solid var(--line-soft);
+    font-size: var(--fs-sm);
+    color: var(--fg-2);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .variant-chip.active {
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .variant-chip .thumb {
+    width: 32px; height: 20px;
+    border-radius: 3px;
+    background: linear-gradient(135deg, #fff1e3, #ffd9b3);
+    flex-shrink: 0;
+  }
+
+  /* ───── 右:chat 副驾(固定 340)───── */
+  .chat {
+    background: var(--bg-panel);
+    border-left: 1px solid var(--line-hair);
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    overflow: hidden;
+  }
+  .chat-head {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line-hair);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .chat-head .title {
+    font-size: var(--fs-md);
+    font-weight: 600;
+  }
+  .chat-head .sub {
+    font-size: var(--fs-xs);
+    color: var(--fg-3);
+    margin-top: 2px;
+  }
+  .chat-head .tabs {
+    margin-left: auto;
+    display: flex; gap: 4px;
+    background: var(--bg-base);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm);
+    padding: 2px;
+  }
+  .chat-head .tabs button {
+    padding: 3px 9px;
+    border-radius: 3px;
+    font-size: var(--fs-xs);
+    color: var(--fg-3);
+  }
+  .chat-head .tabs button.active { background: var(--bg-elevated); color: var(--fg-1); }
+  .chat-head .tabs button .num {
+    margin-left: 4px;
+    font-family: var(--font-mono);
+    color: var(--fg-3);
+    font-size: var(--fs-2xs);
+  }
+
+  .chat-body {
+    overflow-y: auto;
+    padding: 14px 16px;
+    display: flex; flex-direction: column;
+    gap: 14px;
+  }
+  .msg-user, .msg-asst {
+    display: flex; flex-direction: column;
+    gap: 4px;
+  }
+  .msg-meta {
+    font-size: var(--fs-2xs);
+    color: var(--fg-4);
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .msg-meta .who { color: var(--fg-3); }
+  .msg-user .bubble {
+    background: var(--bg-elevated);
+    padding: 8px 11px;
+    border-radius: var(--r-sm);
+    font-size: var(--fs-md);
+    color: var(--fg-1);
+    align-self: flex-end;
+    max-width: 88%;
+  }
+  .msg-asst .body {
+    font-size: var(--fs-md);
+    color: var(--fg-1);
+    line-height: 1.55;
+    white-space: pre-wrap;
+  }
+  .msg-asst .actions {
+    margin-top: 4px;
+    display: flex; gap: 6px;
+    opacity: 0.5;
+    transition: opacity 0.15s;
+  }
+  .msg-asst:hover .actions { opacity: 1; }
+  .msg-asst .actions button {
+    font-size: var(--fs-2xs);
+    color: var(--fg-3);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  .msg-asst .actions button:hover { background: var(--bg-elevated); color: var(--fg-1); }
+
+  .tool-block {
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm);
+    background: var(--bg-base);
+    overflow: hidden;
+  }
+  .tool-block .head {
+    padding: 7px 10px;
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+  }
+  .tool-block .head .name {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .tool-block .head .target { color: var(--fg-2); }
+  .tool-block .head .dur {
+    margin-left: auto;
+    color: var(--fg-4);
+    font-size: var(--fs-2xs);
+  }
+  .tool-block.running .head .name { color: var(--accent); }
+  .tool-block.running .head .name::before {
+    content: ""; display: inline-block;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+    margin-right: 6px;
+    animation: pulse 1.2s ease-in-out infinite;
+    vertical-align: 1px;
+  }
+
+  .chat-input {
+    border-top: 1px solid var(--line-hair);
+    padding: 12px 14px 14px;
+    background: var(--bg-panel);
+  }
+  .chat-input .box {
+    background: var(--bg-base);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-md);
+    padding: 10px 12px;
+    transition: border-color 0.12s;
+  }
+  .chat-input .box:focus-within { border-color: var(--line-strong); }
+  .chat-input textarea {
+    width: 100%;
+    min-height: 44px;
+    font-size: var(--fs-md);
+    color: var(--fg-1);
+  }
+  .chat-input textarea::placeholder { color: var(--fg-4); }
+  .chat-input .bar {
+    margin-top: 8px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .chat-input .bar .left { display: flex; gap: 4px; }
+  .chat-input .bar .icon-btn {
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    border-radius: 4px;
+    color: var(--fg-3);
+    font-size: 14px;
+  }
+  .chat-input .bar .icon-btn:hover { background: var(--bg-elevated); color: var(--fg-1); }
+  .chat-input .bar .send {
+    margin-left: auto;
+    background: var(--accent);
+    color: #1a0a00;
+    font-weight: 600;
+    font-size: var(--fs-xs);
+    padding: 5px 12px;
+    border-radius: var(--r-sm);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .chat-input .bar .send .kbd {
+    background: rgba(0,0,0,0.18);
+    border-color: rgba(0,0,0,0.25);
+    color: rgba(0,0,0,0.7);
+  }
+
+  /* 项目嵌 chat 的浮层(从 rail 第一个按钮展开)*/
+  .proj-flyout {
+    position: absolute;
+    top: 56px; left: 56px;
+    width: 280px;
+    max-height: 70vh;
+    background: var(--bg-elevated);
+    border: 1px solid var(--line-mid);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-pop);
+    padding: 8px;
+    overflow-y: auto;
+    z-index: 50;
+    display: none;
+  }
+  .proj-flyout.open { display: block; }
+  .proj-flyout .group { margin-bottom: 4px; }
+  .proj-flyout .proj {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px;
+    font-size: var(--fs-sm);
+    color: var(--fg-1);
+    border-radius: var(--r-xs);
+  }
+  .proj-flyout .proj:hover { background: var(--bg-base); }
+  .proj-flyout .proj.active { color: var(--accent); }
+  .proj-flyout .proj .arrow { color: var(--fg-4); font-size: 9px; transition: transform 0.15s; }
+  .proj-flyout .proj.open .arrow { transform: rotate(90deg); }
+  .proj-flyout .proj .badge {
+    margin-left: auto;
+    background: var(--accent); color: #000;
+    border-radius: 7px;
+    font-size: 9px; font-weight: 700;
+    padding: 1px 5px;
+  }
+  .proj-flyout .chats { padding-left: 22px; display: flex; flex-direction: column; gap: 1px; }
+  .proj-flyout .chat-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 4px 8px;
+    font-size: var(--fs-xs);
+    color: var(--fg-2);
+    border-radius: var(--r-xs);
+  }
+  .proj-flyout .chat-item:hover { background: var(--bg-base); }
+  .proj-flyout .chat-item.active { color: var(--accent); background: var(--accent-soft); }
+  .proj-flyout .chat-item .date { color: var(--fg-4); font-family: var(--font-mono); font-size: 9px; }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ─── topbar ─── -->
+  <div class="topbar">
+    <div class="traffic"><span></span><span></span><span></span></div>
+    <div class="proj-name" data-aid="iv4009f9">Kanban 重设计</div>
+    <div class="crumb">~/work/linear-clone<span class="accent" data-aid="b3zon2g5">/.design/</span></div>
+    <span class="pill success"><span class="dot ok"></span>git clean</span>
+    <div class="right">
+      <span class="pill"><span class="dot live"></span>connected · claude-sonnet-4</span>
+      <span class="kbd" data-aid="xcod961y">⌘K</span>
+    </div>
+  </div>
+
+  <!-- ─── 左 rail ─── -->
+  <nav class="rail" data-aid="swmhjzrh">
+    <button class="rail-btn active" title="项目 & chats" data-aid="i089x9pl">
+      📂
+    </button>
+    <button class="rail-btn" title="文件 (⌘1)" data-aid="is9d9fcv">
+      📄
+    </button>
+    <button class="rail-btn" title="搜索 (⌘F)" data-aid="cqj35xpn">
+      🔍
+    </button>
+    <button class="rail-btn" title="Tweak 控件" data-aid="u4dyqrxv">
+      🎛
+      <span class="badge" data-aid="yrv3xkkt">3</span>
+    </button>
+    <button class="rail-btn" title="附件 / uploads" data-aid="b86dps44">
+      🖼
+    </button>
+    <div class="rail-spacer"></div>
+    <button class="rail-btn" title="模型设置" data-aid="1dd00x2g">⚙</button>
+    <button class="rail-btn" title="导出" data-aid="3am0veb6">↗</button>
+  </nav>
+
+  <!-- 项目 + chats flyout(默认展开演示)-->
+  <div class="proj-flyout open">
+    <div class="group">
+      <div class="proj open active">
+        <span class="arrow" data-aid="ipy3q0me">▶</span>
+        <span data-aid="bd1ln7xj">Kanban 重设计</span>
+      </div>
+      <div class="chats">
+        <div class="chat-item">侧栏导航三方案 <span class="date" data-aid="46olyoi6">今天</span></div>
+        <div class="chat-item active">卡片密度对比 <span class="date" data-aid="q246bfeu">今天</span></div>
+        <div class="chat-item">空状态打磨 <span class="date" data-aid="8vj4wvg0">昨天</span></div>
+      </div>
+    </div>
+    <div class="group">
+      <div class="proj">
+        <span class="arrow" data-aid="mn0ocgwe">▶</span>
+        <span data-aid="uksqqia3">SaaS Landing</span>
+        <span class="badge" data-aid="42jtjgk2">2</span>
+      </div>
+    </div>
+    <div class="group">
+      <div class="proj"><span class="arrow" data-aid="vot83wzq">▶</span><span data-aid="lr7ckjw4">Mobile Onboarding</span></div>
+    </div>
+    <div class="group">
+      <div class="proj"><span class="arrow" data-aid="vhd122na">▶</span><span data-aid="syd2wnf2">Dashboard v2</span></div>
+    </div>
+    <div class="group">
+      <div class="proj"><span class="arrow" data-aid="wgq3ofto">▶</span><span data-aid="7c3ns4ty">Pricing 页</span></div>
+    </div>
+    <div class="group">
+      <div class="proj"><span class="arrow" data-aid="jhzi2qc2">▶</span><span data-aid="sdbu1f47">邮件模板</span></div>
+    </div>
+    <div class="group">
+      <div class="proj"><span class="arrow" data-aid="mweida5c">▶</span><span data-aid="o517iwve">图标库</span></div>
+    </div>
+    <div class="group">
+      <div class="proj"><span class="arrow" data-aid="5ck58mjg">▶</span><span data-aid="f8ef30af">Docs 站点</span></div>
+    </div>
+    <div style="border-top: 1px solid var(--line-soft); margin-top: 6px; padding-top: 6px;">
+      <div class="proj" style="color: var(--accent);" data-aid="vysjg26i">＋ 新建项目</div>
+    </div>
+  </div>
+
+  <!-- ─── 中:画布 ─── -->
+  <section class="center" data-aid="0dvap60w">
+    <!-- toolbar -->
+    <div class="center-toolbar">
+      <div class="mode-tabs">
+        <button class="mode-tab active" data-aid="a6o2d2by">▶ Preview <span class="kbd" data-aid="sbo14oiz">1</span></button>
+        <button class="mode-tab" data-aid="qxvyub9r">⊙ Inspect <span class="kbd" data-aid="5hclvhjv">2</span></button>
+        <button class="mode-tab" data-aid="niqammuy">💬 Comment <span class="kbd" data-aid="vm6wqo1h">3</span></button>
+        <button class="mode-tab" data-aid="456vhma1">✎ Edit <span class="kbd" data-aid="xqpakj6x">4</span></button>
+      </div>
+      <div class="viewport-pills">
+        <button class="vp active" data-aid="hhq5hi8z">desktop</button>
+        <button class="vp" data-aid="1t7k9t2s">tablet</button>
+        <button class="vp" data-aid="pxuzg0jg">375</button>
+      </div>
+      <div class="grow"></div>
+      <div class="file-tab">
+        <span style="color: var(--fg-3);" data-aid="0k5ytljg">▾</span>
+        variants/sidebar-led/index.html
+      </div>
+      <button class="icon-btn" title="刷新预览" data-aid="6bwdivs8">↻</button>
+      <button class="icon-btn" title="新窗口打开" data-aid="u7wsf639">⧉</button>
+    </div>
+
+    <!-- canvas -->
+    <div class="canvas-wrap">
+      <div class="canvas-frame">
+        <div class="canvas-frame-bar">
+          <div class="traffic"><span></span><span></span><span></span></div>
+          <span data-aid="3xdre6kx">preview · variants/sidebar-led/index.html</span>
+          <span style="margin-left:auto;" data-aid="n5862fjp">1280 × auto · 100%</span>
+        </div>
+        <div class="canvas-mock">
+          <nav class="mk-nav" data-aid="gympit96">
+            <div class="mk-logo" data-aid="z824ytqb">Linear-fork</div>
+            <div class="mk-nav-links"><span data-aid="k7fv28ec">产品</span><span data-aid="bjmzsx8f">价格</span><span data-aid="gznn84k8">客户</span><span data-aid="ek2pti7o">博客</span></div>
+            <button class="mk-cta" data-aid="d3721fvq">开始试用</button>
+          </nav>
+          <section class="mk-hero" data-aid="oz68f3i7">
+            <div>
+              <h1 class="mk-h1" data-aid="uy09zlfv">让团队的<em>每一次冲刺</em><br/>都看得见。</h1>
+              <p class="mk-sub" data-aid="zo3rqb9b">现代化的项目管理工具,为产品工程团队打造。三人到三百人,从想法到上线,只用一个工具。</p>
+              <div class="mk-actions">
+                <button class="mk-btn-primary" data-aid="p6tld2yl">免费开始 →</button>
+                <button class="mk-btn-ghost" data-aid="7cbcb343">看演示</button>
+              </div>
+            </div>
+            <div class="mk-hero-art"></div>
+          </section>
+          <section class="mk-features" data-aid="gc6wza0v">
+            <div class="mk-feat">
+              <div class="mk-feat-ico" data-aid="0gdp25kw">⚡</div>
+              <h3 data-aid="r29ad9e8">极速键盘流</h3>
+              <p data-aid="n7qaj2dz">所有操作都有快捷键,鼠标只是备用方案。</p>
+            </div>
+            <div class="mk-feat">
+              <div class="mk-feat-ico" data-aid="047mn1lh">🔗</div>
+              <h3 data-aid="2hu82ja6">Git 原生集成</h3>
+              <p data-aid="ut19u4rp">PR 与 issue 自动绑定,合并即关闭。</p>
+            </div>
+            <div class="mk-feat">
+              <div class="mk-feat-ico" data-aid="p9c9g2nj">📊</div>
+              <h3 data-aid="eyv1ecyp">透明的迭代节奏</h3>
+              <p data-aid="4ja7zk55">看板、列表、甘特图,一个数据源,三种视角。</p>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- 变体切换条 -->
+    <div class="variant-bar">
+      <span class="label" data-aid="2ftinhyj">variants</span>
+      <button class="variant-chip active" data-aid="h8frlfe2">
+        <span class="thumb"></span>
+        sidebar-led
+        <span class="pill accent" style="margin-left:4px;" data-aid="g19u115w">A</span>
+      </button>
+      <button class="variant-chip" data-aid="mp940jaq">
+        <span class="thumb" style="background: linear-gradient(135deg,#fff5ea,#ffd9b3);"></span>
+        canvas-first-dock
+        <span class="pill" style="margin-left:4px;" data-aid="sx10o64g">B</span>
+      </button>
+      <button class="variant-chip" data-aid="l3pyn2yj">
+        <span class="thumb" style="background: linear-gradient(135deg,#ffe9d4,#ffcb95);"></span>
+        spatial-overlay
+        <span class="pill" style="margin-left:4px;" data-aid="wzwc61wm">C</span>
+      </button>
+      <div style="flex:1;"></div>
+      <span style="font-size: var(--fs-xs); color: var(--fg-3); font-family: var(--font-mono);" data-aid="lo89c84f">
+        ↶ 回滚 turn · 上一条 12s 前
+      </span>
+    </div>
+  </section>
+
+  <!-- ─── 右:chat ─── -->
+  <aside class="chat" data-aid="g06f6w7o">
+    <header class="chat-head" data-aid="440i1w50">
+      <div>
+        <div class="title" data-aid="4ytr3jcd">卡片密度对比</div>
+        <div class="sub" data-aid="v064izes">Kanban 重设计 · 11 条消息</div>
+      </div>
+      <div class="tabs">
+        <button class="active" data-aid="48bguyqr">Chat<span class="num" data-aid="4ir5ydkz">11</span></button>
+        <button data-aid="j7sgpyme">Q<span class="num" data-aid="f2idjffv">5</span></button>
+        <button data-aid="dc3kn5jt">Tweak<span class="num" data-aid="wztzvgwb">3</span></button>
+      </div>
+    </header>
+
+    <div class="chat-body">
+      <!-- msg 1 user -->
+      <div class="msg-user">
+        <div class="msg-meta"><span class="who" data-aid="wexzfftl">你 · 14:02</span></div>
+        <div class="bubble" data-aid="f06n6nzf">卡片密度对比一下,3 个方向,密一点的我想看看极限。</div>
+      </div>
+
+      <!-- msg 2 assistant -->
+      <div class="msg-asst">
+        <div class="msg-meta">
+          <span class="who" data-aid="8e8mkjas">claude</span>
+          <span data-aid="2ghrstea">·</span>
+          <span data-aid="ojf2ln21">recon</span>
+        </div>
+        <div class="body" data-aid="2wa4isyc">Recon:Kanban 卡片密度三档对比 — 用户(PM/Dev)每屏需要看到多少卡片是核心矛盾。
+
+先确认 3 件事:</div>
+      </div>
+
+      <!-- tool: ask_questions -->
+      <div class="tool-block">
+        <div class="head">
+          <span class="name" data-aid="yqmrsdda">ask_questions</span>
+          <span class="target" data-aid="ai3zvf1r">→ Questions tab</span>
+          <span class="dur" data-aid="knisc21q">0.1s</span>
+        </div>
+        <div style="padding: 0 10px 9px; font-size: var(--fs-xs); color: var(--fg-3);">
+          5 题 · 业务 → 约束 → 美学 ·
+          <span style="color: var(--success);" data-aid="evs1u4k6">已答</span>
+        </div>
+      </div>
+
+      <!-- msg 3 assistant -->
+      <div class="msg-asst">
+        <div class="msg-meta"><span class="who" data-aid="3flv9us0">claude</span></div>
+        <div class="body">好,变化轴:<b>单卡承载的信息层数</b>。
+A 标题+负责人;B + 子任务进度;C + 评论数+附件+blocker。</div>
+      </div>
+
+      <!-- tool: write_file 1 -->
+      <div class="tool-block">
+        <div class="head">
+          <span class="name" data-aid="3sgrqids">write_file</span>
+          <span class="target" data-aid="pjvwdt5r">shared/styles.css</span>
+          <span class="dur" data-aid="7czm67bs">0.4s · 4.2kb</span>
+        </div>
+      </div>
+
+      <!-- tool: write_file 2 running -->
+      <div class="tool-block running">
+        <div class="head">
+          <span class="name" data-aid="y5oc6yar">write_file</span>
+          <span class="target" data-aid="77stp1fe">variants/sparse/index.html</span>
+          <span class="dur" data-aid="gg0n8eaz">…</span>
+        </div>
+      </div>
+
+      <!-- msg 4 user -->
+      <div class="msg-user">
+        <div class="msg-meta"><span class="who" data-aid="615o31qr">你 · 14:08</span></div>
+        <div class="bubble" data-aid="s44b565o">停一下 — sparse 那版卡片间距给我大一档。</div>
+      </div>
+
+      <!-- msg 5 assistant -->
+      <div class="msg-asst">
+        <div class="msg-meta"><span class="who" data-aid="iylooxht">claude · 正在写</span><span class="dot live"></span></div>
+        <div class="body" data-aid="7dgpgsxw">收到,改完继续 B/C。已加 Tweak 控件可自己拉。</div>
+        <div class="actions">
+          <button data-aid="q5gtkmn8">↶ 回滚到此</button>
+          <button data-aid="25zdcc07">📋 复制</button>
+          <button data-aid="lppbutjs">🌿 分支</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-input">
+      <div class="box">
+        <textarea placeholder="给 AI 写指令… 拖文件 / 图进来即附件" data-aid="8xgdri40"></textarea>
+        <div class="bar">
+          <div class="left">
+            <button class="icon-btn" title="附件" data-aid="6qjmiunl">📎</button>
+            <button class="icon-btn" title="@ 引用" data-aid="k5xe33ws">@</button>
+            <button class="icon-btn" title="录音" data-aid="zp3r54xa">🎙</button>
+          </div>
+          <button class="send" data-aid="j25qgix4">发送 <span class="kbd" data-aid="n6n34s5z">↵</span></button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+</body>
+</html>

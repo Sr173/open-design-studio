@@ -122,7 +122,7 @@ export function FileTree({
         )}
         {root.map((f) => (
           <FileItem
-            key={f.id}
+            key={f.id ?? f.path}
             file={f}
             selected={f.path === selectedPath}
             onClick={() => onSelect?.(f.path)}
@@ -142,7 +142,7 @@ export function FileTree({
         )}
         {uploads.map((f) => (
           <FileItem
-            key={f.id}
+            key={f.id ?? f.path}
             file={f}
             selected={f.path === selectedPath}
             onClick={() => onSelect?.(f.path)}

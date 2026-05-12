@@ -146,7 +146,7 @@ export function isValidPath(path: string): boolean {
   return true;
 }
 
-/** 给 read_file 工具用:超大文件按行截取 */
+/** 给 read_file 工具用:超大文件按行截取(legacy,留向后兼容)*/
 export function sliceContent(
   content: string,
   offset?: number,
@@ -157,6 +157,76 @@ export function sliceContent(
   const start = offset ?? 0;
   const end = limit != null ? start + limit : lines.length;
   return lines.slice(start, end).join('\n');
+}
+
+/** 默认每次 read 最多返这么多行(超出截断,AI 用 offset 翻页)*/
+export const READ_LINES_DEFAULT = 2000;
+/** 文件极长 / 二进制误判时的字节硬上限 */
+export const READ_BYTES_HARDCAP = 256 * 1024;
+
+/** read_file 工具的标准输出格式 — 带行号 + 截断透明度
+ *
+ * 输出形如:
+ *     1→#!/usr/bin/env node
+ *     2→import { foo } from 'bar';
+ *  ...
+ *  2000→  return result;
+ *
+ * [file has 5234 lines · showing 1–2000 · pass offset=2000 to read more]
+ *
+ * 第一行 1-indexed,行号右对齐到总行数宽度。AI 看到 "→" 一眼能区分行号 vs 内容
+ */
+export function formatFileForLLM(opts: {
+  content: string;
+  offset?: number;    // 0-indexed line offset(跟之前 sliceContent 兼容,内部转 1-indexed 显示)
+  limit?: number;     // default READ_LINES_DEFAULT
+  path?: string;      // 可选,加进 footer 让 AI 一眼定位
+}): string {
+  const limit = opts.limit ?? READ_LINES_DEFAULT;
+  const offset = opts.offset ?? 0;
+  const lines = opts.content.split('\n');
+  const total = lines.length;
+
+  // 截掉末尾因 split 产生的空行(EOL → split 多一个空 entry)
+  const realLines = lines[total - 1] === '' && total > 1 ? lines.slice(0, -1) : lines;
+  const realTotal = realLines.length;
+
+  const start = Math.max(0, offset);
+  const end = Math.min(realTotal, start + limit);
+  const slice = realLines.slice(start, end);
+
+  // 行号右对齐到结尾行号的宽度
+  const lastLineNo = start + slice.length; // 1-indexed last
+  const w = Math.max(4, String(lastLineNo).length);
+
+  const numbered = slice
+    .map((ln, i) => {
+      const n = String(start + i + 1).padStart(w, ' ');
+      return `${n}→${ln}`;
+    })
+    .join('\n');
+
+  const truncated = end < realTotal;
+  if (!truncated && start === 0) {
+    // 完整文件,加个简短脚注
+    return numbered + (realTotal > 0 ? `\n\n[file: ${realTotal} lines${opts.path ? ` · ${opts.path}` : ''}]` : '');
+  }
+
+  const parts: string[] = [];
+  parts.push(`[file has ${realTotal} lines${opts.path ? ` · ${opts.path}` : ''} · showing ${start + 1}–${end}`);
+  if (truncated) {
+    const nextOffset = end;
+    parts.push(`· ${realTotal - end} more · pass offset=${nextOffset} to continue`);
+  }
+  parts.push(']');
+  return numbered + '\n\n' + parts.join(' ');
+}
+
+/** 对超大单文件,截断到 byte hardcap 后再走 formatFileForLLM */
+export function clampForRead(content: string): { content: string; clamped: boolean; origBytes: number } {
+  const origBytes = content.length;
+  if (origBytes <= READ_BYTES_HARDCAP) return { content, clamped: false, origBytes };
+  return { content: content.slice(0, READ_BYTES_HARDCAP), clamped: true, origBytes };
 }
 
 /** 用于 PreviewPane 等:拿到项目当前 rootPath(是否本地文件夹) */

@@ -53,6 +53,21 @@ export function registerIpc(getMainWindow: () => BrowserWindow | null) {
     return true;
   });
 
+  // source 命名空间 — 只读用户原代码(不进 .design/)
+  ipcMain.handle('fs:read-source', (_e, rootPath: string, relPath: string) =>
+    fsService.readSource(rootPath, relPath)
+  );
+  ipcMain.handle(
+    'fs:list-source',
+    (_e, rootPath: string, subPath: string = '') =>
+      fsService.listSource(rootPath, subPath)
+  );
+  ipcMain.handle(
+    'fs:search',
+    (_e, rootPath: string, opts: fsService.SearchOpts) =>
+      fsService.searchFiles(rootPath, opts)
+  );
+
   // === dialog ===
   ipcMain.handle('dialog:pick-directory', async () => {
     const win = getMainWindow();

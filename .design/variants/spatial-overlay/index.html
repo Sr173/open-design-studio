@@ -1,0 +1,612 @@
+<!doctype html>
+/* C · spatial-overlay (大胆 · bold / 探索)
+ * 风险梯度:大胆探索 — 抹掉所有"栏"的概念,风险最高但天花板也最高,Arc/Figma 路线。
+ * DNA: 画布即整个屏幕,顶部仅 28px HUD;chat 是从底部拉起的抽屉,filetree/Tweak/Questions 都是浮层卡或 ⌘K 召唤,模式选择器是右上 orb。
+ * Fits: "画布占比是头号痛点"的极致解;单变体深打磨、客户演示、高分屏验稿,画布永远 ≥90% 屏幕。键盘流熟手 daily driver。
+ * Tradeoff: 抽屉/浮层/orb 需要键盘记忆和上下文切换,新手第一眼会觉得"东西呢?";chat 收起时容易忘 AI 在跑什么,需 HUD 强信号补偿。
+ */
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>ai-design · C spatial-overlay</title>
+<link rel="stylesheet" href="../../shared/styles.css" />
+<style>
+  body { background: #07080a; }
+
+  .app {
+    height: 100vh;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* ───── 极窄 HUD(顶部 24px)───── */
+  .hud {
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 28px;
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 12px;
+    background: linear-gradient(180deg, rgba(11,12,15,0.92), rgba(11,12,15,0.6) 70%, transparent);
+    font-size: var(--fs-2xs);
+    color: var(--fg-3);
+    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+    z-index: 10;
+    backdrop-filter: blur(6px);
+  }
+  .hud .traffic { display: flex; gap: 6px; margin-right: 4px; }
+  .hud .traffic span {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--line-mid);
+  }
+  .hud .traffic span:nth-child(1) { background: #ff6b6b; }
+  .hud .traffic span:nth-child(2) { background: #ffcc66; }
+  .hud .traffic span:nth-child(3) { background: #6ec98f; }
+  .hud .proj {
+    color: var(--fg-1);
+    font-family: var(--font-ui);
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: -0.005em;
+    font-size: var(--fs-sm);
+  }
+  .hud .crumb {
+    color: var(--fg-3);
+  }
+  .hud .crumb .accent { color: var(--accent); }
+  .hud .right { margin-left: auto; display: flex; gap: 12px; align-items: center; }
+  .hud .live { display: flex; align-items: center; gap: 5px; color: var(--fg-2); }
+  .hud kbd {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 1px 4px;
+    border: 1px solid var(--line-mid);
+    border-radius: 3px;
+    color: var(--fg-2);
+  }
+
+  /* ───── 画布(铺满屏幕)───── */
+  .stage {
+    position: absolute; inset: 0;
+    overflow: auto;
+    padding: 36px 36px 100px;
+    display: flex; justify-content: center; align-items: stretch;
+  }
+  .canvas-frame {
+    flex: 1;
+    max-width: 1500px;
+    min-height: calc(100vh - 140px);
+    align-self: stretch;
+  }
+  .canvas-frame-bar {
+    background: rgba(19,20,24,0.85);
+    backdrop-filter: blur(8px);
+  }
+
+  /* ───── 浮动模式选择器(画布右上角)───── */
+  .mode-orb {
+    position: absolute;
+    top: 48px; right: 36px;
+    display: flex; flex-direction: column; gap: 4px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-md);
+    padding: 4px;
+    box-shadow: var(--shadow-pop);
+    z-index: 20;
+    backdrop-filter: blur(6px);
+  }
+  .mode-orb button {
+    width: 32px; height: 32px;
+    display: grid; place-items: center;
+    border-radius: var(--r-xs);
+    color: var(--fg-3);
+    font-size: 14px;
+    position: relative;
+  }
+  .mode-orb button:hover { background: var(--bg-base); color: var(--fg-1); }
+  .mode-orb button.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .mode-orb button .kbd {
+    position: absolute;
+    right: -22px; top: 50%; transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    color: var(--fg-4);
+    font-size: 10px;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .mode-orb:hover button .kbd { opacity: 1; }
+  .mode-orb .sep {
+    height: 1px;
+    background: var(--line-soft);
+    margin: 2px 4px;
+  }
+
+  /* ───── 浮动变体卡(右下,水平排)───── */
+  .variant-deck {
+    position: absolute;
+    right: 36px; bottom: 100px;
+    display: flex; gap: 8px;
+    z-index: 18;
+  }
+  .variant-deck .card {
+    width: 110px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    box-shadow: var(--shadow-pop);
+    text-align: left;
+  }
+  .variant-deck .card:hover { border-color: var(--line-mid); }
+  .variant-deck .card.active {
+    border-color: var(--accent);
+    transform: translateY(-4px);
+  }
+  .variant-deck .card .preview {
+    height: 60px;
+    background: linear-gradient(135deg, #fff1e3, #ffd9b3);
+    position: relative;
+  }
+  .variant-deck .card .preview::after {
+    content: "";
+    position: absolute; inset: 8px;
+    background: rgba(255,255,255,0.5);
+    border-radius: 3px;
+    background-image:
+      linear-gradient(0deg, transparent 90%, rgba(0,0,0,0.06) 90%),
+      linear-gradient(90deg, transparent 90%, rgba(0,0,0,0.06) 90%);
+    background-size: 8px 8px;
+  }
+  .variant-deck .card .meta {
+    padding: 6px 8px 7px;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .variant-deck .card .letter {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-4);
+    font-weight: 700;
+  }
+  .variant-deck .card.active .letter { color: var(--accent); }
+  .variant-deck .card .label {
+    font-size: var(--fs-2xs);
+    color: var(--fg-2);
+  }
+  .variant-deck .card.active .label { color: var(--fg-1); }
+
+  /* ───── 底部 chat 抽屉(拉起态)───── */
+  .drawer {
+    position: absolute;
+    left: 50%; transform: translateX(-50%);
+    bottom: 0;
+    width: min(880px, calc(100vw - 72px));
+    height: 64px;
+    background: var(--bg-panel);
+    border: 1px solid var(--line-mid);
+    border-bottom: 0;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    box-shadow: var(--shadow-dock);
+    z-index: 22;
+    transition: height 0.2s ease;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    overflow: hidden;
+  }
+  .drawer.expanded { height: 460px; }
+
+  .drawer-handle {
+    height: 16px;
+    display: flex; justify-content: center; align-items: flex-start;
+    padding-top: 5px;
+    cursor: ns-resize;
+  }
+  .drawer-handle::after {
+    content: "";
+    width: 36px; height: 3px;
+    border-radius: 2px;
+    background: var(--line-mid);
+  }
+
+  .drawer-input-row {
+    padding: 4px 14px 12px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .drawer-input-row .typing-state {
+    display: flex; align-items: center; gap: 8px;
+    padding: 2px 8px;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-line);
+    border-radius: var(--r-xs);
+    font-size: var(--fs-2xs);
+    color: var(--accent);
+    font-family: var(--font-mono);
+  }
+  .drawer-input-row .typing-state .dot { background: var(--accent); }
+
+  .drawer-box {
+    flex: 1;
+    background: var(--bg-base);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-md);
+    padding: 8px 12px;
+    display: flex; align-items: center; gap: 10px;
+    transition: border-color 0.12s;
+  }
+  .drawer-box:focus-within { border-color: var(--line-strong); }
+  .drawer-box .at {
+    font-family: var(--font-mono);
+    color: var(--accent);
+    font-size: var(--fs-xs);
+    padding: 2px 6px;
+    background: var(--accent-soft);
+    border-radius: 3px;
+  }
+  .drawer-box input {
+    flex: 1;
+    font-size: var(--fs-md);
+  }
+  .drawer-box input::placeholder { color: var(--fg-4); }
+  .drawer-box .right { display: flex; gap: 4px; align-items: center; }
+  .drawer-box .icon-btn {
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    border-radius: 3px;
+    color: var(--fg-3);
+    font-size: 12px;
+  }
+  .drawer-box .icon-btn:hover { background: var(--bg-elevated); color: var(--fg-1); }
+  .drawer-box .send {
+    background: var(--accent);
+    color: #1a0a00;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 4px 10px;
+    border-radius: 3px;
+    letter-spacing: 0.04em;
+  }
+
+  .drawer-tabs {
+    display: flex; align-items: center; gap: 4px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--line-hair);
+    height: 32px;
+  }
+  .drawer-tabs button {
+    padding: 4px 10px;
+    font-size: var(--fs-xs);
+    color: var(--fg-3);
+    border-radius: var(--r-xs);
+    display: flex; align-items: center; gap: 5px;
+  }
+  .drawer-tabs button.active {
+    color: var(--fg-1);
+    background: var(--bg-elevated);
+  }
+  .drawer-tabs .num {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--fg-4);
+    background: var(--bg-base);
+    padding: 0 5px;
+    border-radius: 7px;
+    min-width: 16px;
+    text-align: center;
+  }
+  .drawer-tabs .grow { flex: 1; }
+  .drawer-tabs .turn-info {
+    font-size: var(--fs-2xs);
+    color: var(--fg-3);
+    font-family: var(--font-mono);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .drawer-tabs .turn-info button {
+    color: var(--fg-3);
+    font-size: 11px;
+    padding: 2px 6px;
+  }
+  .drawer-tabs .turn-info button:hover { color: var(--fg-1); background: var(--bg-elevated); }
+
+  .drawer-body {
+    overflow-y: auto;
+    padding: 14px 18px;
+    display: flex; flex-direction: column;
+    gap: 12px;
+  }
+  .msg-user, .msg-asst {
+    display: flex; flex-direction: column;
+    gap: 4px;
+  }
+  .msg-meta {
+    font-size: 9px;
+    color: var(--fg-4);
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .msg-user .bubble {
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-line);
+    padding: 8px 12px;
+    border-radius: var(--r-sm);
+    font-size: var(--fs-md);
+    align-self: flex-end;
+    max-width: 70%;
+  }
+  .msg-asst .body {
+    font-size: var(--fs-md);
+    line-height: 1.55;
+    max-width: 80%;
+    white-space: pre-wrap;
+  }
+  .tool-line {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 11px;
+    background: var(--bg-base);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    align-self: flex-start;
+    max-width: 80%;
+  }
+  .tool-line .name { color: var(--accent); font-weight: 600; }
+  .tool-line .arrow { color: var(--fg-4); }
+  .tool-line .target { color: var(--fg-2); }
+  .tool-line .dur { color: var(--fg-4); margin-left: 6px; }
+  .tool-line.running .name::before {
+    content: ""; display: inline-block;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--accent);
+    margin-right: 5px;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+
+  /* ───── 浮层卡:filetree(从顶部 ⌘1 拉下来,这里展示一个收起态的 trigger)───── */
+  .pop-trigger {
+    position: absolute;
+    left: 36px; top: 48px;
+    display: flex; flex-direction: column; gap: 6px;
+    z-index: 19;
+  }
+  .pop-trigger button {
+    height: 32px; padding: 0 12px;
+    display: flex; align-items: center; gap: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-md);
+    color: var(--fg-2);
+    font-size: var(--fs-xs);
+    box-shadow: var(--shadow-pop);
+    backdrop-filter: blur(6px);
+  }
+  .pop-trigger button:hover { color: var(--fg-1); border-color: var(--line-mid); }
+  .pop-trigger button .kbd { margin-left: 4px; }
+  .pop-trigger button .badge {
+    background: var(--accent);
+    color: #000;
+    font-size: 9px; font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 7px;
+  }
+
+  /* ───── Inspect 模式 hint(画布右下角小提示,按住 ⌥ 选元素)───── */
+  .inspect-hint {
+    position: absolute;
+    left: 36px; bottom: 100px;
+    padding: 6px 10px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm);
+    font-size: var(--fs-xs);
+    color: var(--fg-3);
+    box-shadow: var(--shadow-pop);
+    z-index: 18;
+    display: flex; align-items: center; gap: 6px;
+    opacity: 0.65;
+  }
+  .inspect-hint .kbd { font-size: 9px; }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- 极窄 HUD -->
+  <div class="hud">
+    <div class="traffic"><span></span><span></span><span></span></div>
+    <span class="proj" data-aid="w7mz1ekc">Kanban 重设计</span>
+    <span class="crumb">~/work/linear-clone<span class="accent" data-aid="vhshy4kb">/.design/</span></span>
+    <span style="color: var(--fg-4);" data-aid="osj3un0m">·</span>
+    <span style="color: var(--fg-2); font-family: var(--font-ui); font-size: var(--fs-sm); text-transform: none; letter-spacing: -0.005em;" data-aid="k9zlr0mj">卡片密度对比</span>
+
+    <div class="right">
+      <span style="color: var(--success);" data-aid="dqsulk2v">● git clean</span>
+      <span class="live"><span class="dot live"></span>claude-sonnet-4</span>
+      <kbd>⌘K</kbd>
+    </div>
+  </div>
+
+  <!-- 画布:铺满 -->
+  <main class="stage" data-aid="cbfvyagk">
+    <div class="canvas-frame">
+      <div class="canvas-frame-bar">
+        <div class="traffic"><span></span><span></span><span></span></div>
+        <span data-aid="w6mo434h">variants/spatial-overlay/index.html · 1280 × auto</span>
+        <span style="margin-left:auto;" data-aid="gi7dxyyo">100%</span>
+      </div>
+      <div class="canvas-mock">
+        <nav class="mk-nav" data-aid="lgw46yp9">
+          <div class="mk-logo" data-aid="1ecyohhp">Linear-fork</div>
+          <div class="mk-nav-links"><span data-aid="z4bkothg">产品</span><span data-aid="8x3zjwnf">价格</span><span data-aid="kqeno6l7">客户</span><span data-aid="ja5jxc9x">博客</span></div>
+          <button class="mk-cta" data-aid="38mcg88q">开始试用</button>
+        </nav>
+        <section class="mk-hero" data-aid="u2d7baxv">
+          <div>
+            <h1 class="mk-h1" data-aid="53tjsyr3">让团队的<em>每一次冲刺</em><br/>都看得见。</h1>
+            <p class="mk-sub" data-aid="d94ashpw">现代化的项目管理工具,为产品工程团队打造。三人到三百人,从想法到上线,只用一个工具。</p>
+            <div class="mk-actions">
+              <button class="mk-btn-primary" data-aid="1tepbr09">免费开始 →</button>
+              <button class="mk-btn-ghost" data-aid="kd17490y">看演示</button>
+            </div>
+          </div>
+          <div class="mk-hero-art"></div>
+        </section>
+        <section class="mk-features" data-aid="lv2cjjwl">
+          <div class="mk-feat">
+            <div class="mk-feat-ico" data-aid="4ubzgpv7">⚡</div>
+            <h3 data-aid="4qn9slow">极速键盘流</h3>
+            <p data-aid="0bryffqq">所有操作都有快捷键,鼠标只是备用方案。</p>
+          </div>
+          <div class="mk-feat">
+            <div class="mk-feat-ico" data-aid="jvhz8863">🔗</div>
+            <h3 data-aid="oimedmnq">Git 原生集成</h3>
+            <p data-aid="fjq0rsx9">PR 与 issue 自动绑定,合并即关闭。</p>
+          </div>
+          <div class="mk-feat">
+            <div class="mk-feat-ico" data-aid="ufpme7iy">📊</div>
+            <h3 data-aid="1iz8ljux">透明的迭代节奏</h3>
+            <p data-aid="c2gndeco">看板、列表、甘特图,一个数据源,三种视角。</p>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!-- 左上浮起触发器 -->
+  <div class="pop-trigger">
+    <button data-aid="h74da99d">📂 项目 / Chats <span class="kbd" data-aid="v6h978x3">⌘P</span></button>
+    <button data-aid="lgkd5e74">📄 文件 (12) <span class="kbd" data-aid="7eh7m6j6">⌘1</span></button>
+  </div>
+
+  <!-- 右上模式 orb -->
+  <div class="mode-orb">
+    <button class="active" title="Preview" data-aid="3da9x4uo"><span data-aid="36az7tkf">▶</span><span class="kbd" data-aid="8ixt0qso">1</span></button>
+    <button title="Inspect" data-aid="bie64ca0"><span data-aid="6d57mxro">⊙</span><span class="kbd" data-aid="fb2fg0bq">2</span></button>
+    <button title="Comment" data-aid="cvnmwkx8"><span data-aid="quqlngmi">💬</span><span class="kbd" data-aid="sn42izoc">3</span></button>
+    <button title="Edit" data-aid="2e0nm14a"><span data-aid="oswrzl4s">✎</span><span class="kbd" data-aid="3sgsv78k">4</span></button>
+    <div class="sep"></div>
+    <button title="Tweak 控件" data-aid="ixmgh42r"><span data-aid="i4p7ptjt">🎛</span><span class="kbd" data-aid="9bkincvg">T</span></button>
+  </div>
+
+  <!-- Inspect hint(左下,弱提示)-->
+  <div class="inspect-hint">
+    按 <span class="kbd" data-aid="9shu6bej">⌥</span> 临时进入 Inspect · 选元素加评论
+  </div>
+
+  <!-- 变体卡 deck(右下)-->
+  <div class="variant-deck">
+    <button class="card" data-aid="ofe6531t">
+      <div class="preview"></div>
+      <div class="meta">
+        <span class="letter" data-aid="9qp5zdau">A</span>
+        <span class="label" data-aid="3n4w4wo8">sidebar-companion</span>
+      </div>
+    </button>
+    <button class="card" data-aid="7lngwlqq">
+      <div class="preview" style="background: linear-gradient(135deg,#fff5ea,#ffd9b3);"></div>
+      <div class="meta">
+        <span class="letter" data-aid="9yuwhjz8">B</span>
+        <span class="label" data-aid="7toql63m">canvas-first-dock</span>
+      </div>
+    </button>
+    <button class="card active" data-aid="ouwnor4r">
+      <div class="preview" style="background: linear-gradient(135deg,#ffe9d4,#ffcb95);"></div>
+      <div class="meta">
+        <span class="letter" data-aid="wvivmtr4">C</span>
+        <span class="label" data-aid="z2dupnsn">spatial-overlay</span>
+      </div>
+    </button>
+  </div>
+
+  <!-- 底部 chat 抽屉(展开态)-->
+  <aside class="drawer expanded" data-aid="su0ikf84">
+    <div class="drawer-handle"></div>
+
+    <div class="drawer-tabs">
+      <button class="active" data-aid="z833nodh">💬 chat <span class="num" data-aid="57bej0zx">11</span></button>
+      <button data-aid="soog747r">❓ Questions <span class="num" data-aid="ctq8cohg">5</span></button>
+      <button data-aid="azluh6hr">🎛 Tweak <span class="num" data-aid="cv0z40ga">3</span></button>
+      <button data-aid="lmsvkf45">🖼 附件 <span class="num" data-aid="03xw7xne">2</span></button>
+      <span class="grow"></span>
+      <div class="turn-info">
+        <span data-aid="5py8islf">last turn 12s 前</span>
+        <button data-aid="x0iz0eps">↶ 回滚</button>
+        <button title="收起 ⌘" data-aid="i27f740z">▾</button>
+      </div>
+    </div>
+
+    <div class="drawer-body">
+      <div class="msg-user">
+        <div class="msg-meta" data-aid="okexx02r">你 · 14:02</div>
+        <div class="bubble" data-aid="qtplgqwc">卡片密度对比一下,3 个方向,密一点的我想看看极限。</div>
+      </div>
+
+      <div class="msg-asst">
+        <div class="msg-meta" data-aid="ea1ndcev">claude · recon</div>
+        <div class="body" data-aid="fgk7nkbv">Recon:Kanban 卡片密度三档对比 — 用户(PM/Dev)每屏需要看到多少卡片是核心矛盾。
+先确认 3 件事:</div>
+      </div>
+
+      <div class="tool-line">
+        <span class="name" data-aid="tc12avqb">ask_questions</span>
+        <span class="arrow" data-aid="eue6axhr">→</span>
+        <span class="target" data-aid="z2u56xgv">Questions tab · 5 题</span>
+        <span class="dur" data-aid="mn1dd22j">已答</span>
+      </div>
+
+      <div class="msg-asst">
+        <div class="msg-meta" data-aid="3rclr1pe">claude</div>
+        <div class="body">变化轴:<b>单卡承载的信息层数</b>。
+A 标题+负责人;B + 子任务进度;C + 评论数+附件+blocker。</div>
+      </div>
+
+      <div class="tool-line">
+        <span class="name" data-aid="0gyneose">write_file</span>
+        <span class="arrow" data-aid="tba75cey">→</span>
+        <span class="target" data-aid="f2szrpar">shared/styles.css</span>
+        <span class="dur" data-aid="hjhuxbtn">0.4s · 4.2kb</span>
+      </div>
+
+      <div class="tool-line running">
+        <span class="name" data-aid="igckhom4">write_file</span>
+        <span class="arrow" data-aid="74gijo6n">→</span>
+        <span class="target" data-aid="3fc3348v">variants/sparse/index.html</span>
+        <span class="dur" data-aid="wd8u8kn2">writing…</span>
+      </div>
+
+      <div class="msg-user">
+        <div class="msg-meta" data-aid="hxbfvd7h">你 · 14:08</div>
+        <div class="bubble" data-aid="nh2ja5m0">停一下 — sparse 那版卡片间距给我大一档。</div>
+      </div>
+
+      <div class="msg-asst">
+        <div class="msg-meta">claude · 正在写 <span class="dot live"></span></div>
+        <div class="body" data-aid="wvkqvpu5">收到,改完继续 B/C。已加 Tweak 控件可自己拉。</div>
+      </div>
+    </div>
+
+    <div class="drawer-input-row">
+      <div class="typing-state">
+        <span class="dot live"></span>
+        AI 写中
+      </div>
+      <div class="drawer-box">
+        <span class="at" data-aid="8wkei5vf">@card.css</span>
+        <input placeholder="给 AI 写指令… 拖图进来即附件,@ 引用文件,⌘↵ 发送" data-aid="okyv8cl1" />
+        <div class="right">
+          <button class="icon-btn" title="附件" data-aid="pa35hh4p">📎</button>
+          <button class="icon-btn" title="录音" data-aid="o3vc9i3k">🎙</button>
+          <button class="send" data-aid="fvk9yu8u">⌘↵</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+</body>
+</html>

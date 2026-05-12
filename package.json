@@ -1,7 +1,23 @@
 {
-  "name": "ai-design",
-  "version": "0.1.0",
-  "description": "AI + 设计师协作客户端 — 左聊天、右交互面板、AI 写 HTML 即所见",
+  "name": "open-design-studio",
+  "version": "0.6.0",
+  "description": "Open-source AI design studio. Multi-variant canvas, inspect & edit in code. Powered by Claude / GPT. 本地优先的 AI 设计工作台。",
+  "keywords": [
+    "open-design",
+    "ai-design",
+    "claude",
+    "claude-code",
+    "anthropic",
+    "design-tool",
+    "figma-alternative",
+    "electron",
+    "local-first",
+    "multi-variant",
+    "design-system",
+    "ai-coding"
+  ],
+  "homepage": "https://github.com/Sr173/open-design-studio",
+  "license": "MIT",
   "type": "module",
   "private": true,
   "main": "dist-electron/main.mjs",
@@ -15,7 +31,8 @@
     "electron:build": "node electron/build.mjs",
     "electron:build:watch": "node electron/build.mjs --watch",
     "electron:dev": "concurrently -n vite,esbuild,electron -c magenta,yellow,cyan \"pnpm dev:client\" \"pnpm electron:build:watch\" \"wait-on http://localhost:5173 dist-electron/main.mjs && electron dist-electron/main.mjs\"",
-    "electron:start": "electron dist-electron/main.mjs"
+    "electron:start": "electron dist-electron/main.mjs",
+    "reprocess-aids": "tsx scripts/reprocess-aids.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",

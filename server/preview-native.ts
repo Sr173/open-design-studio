@@ -13,7 +13,7 @@
  */
 
 import { Hono } from 'hono';
-import { readFile, validateRoot } from '../electron/services/fs.js';
+import { readFile, validateRoot, DESIGN_DIR } from '../electron/services/fs.js';
 
 const router = new Hono();
 
@@ -40,8 +40,10 @@ router.get('/r/:rootB64/*', async (c) => {
   if (!file) {
     return c.html(
       `<!DOCTYPE html><html><body style="margin:0;padding:24px;font-family:monospace;color:#888;background:#fff">
-<h2 style="color:#444;font-weight:600">file not found</h2>
-<p>path <code>${relPath}</code> 不在 <code>${rootPath}</code> 里</p></body></html>`,
+<h2 style="color:#444;font-weight:600">空项目</h2>
+<p style="color:#666">AI 还没向 <code>${rootPath}/${DESIGN_DIR}/${relPath}</code> 写过任何文件。</p>
+<p style="color:#888;margin-top:16px">在左边 chat 里跟 AI 说一下,比如"做个 SaaS 落地页",AI 会把生成的文件放进
+ <code>.design/</code> 子目录里。</p></body></html>`,
       404
     );
   }
@@ -50,7 +52,11 @@ router.get('/r/:rootB64/*', async (c) => {
   let body: string | Buffer = file.content;
 
   if (contentType.startsWith('text/html')) {
-    body = injectIntoHtml(file.content, rootB64);
+    // 如果 client 传了 pid 数字,就用它(给 sandboxBridge 匹配);否则 fallback rootB64 字符串
+    const pidParam = c.req.query('pid');
+    const pidNum = pidParam && /^\d+$/.test(pidParam) ? Number(pidParam) : null;
+    const injectedId: number | string = pidNum ?? rootB64;
+    body = injectIntoHtml(file.content, injectedId);
   } else if (file.type === 'binary') {
     body = Buffer.from(file.content, 'base64');
   }
@@ -90,8 +96,8 @@ function inferContentType(p: string): string {
 }
 
 /** 跟 SW 注入逻辑一致 */
-function injectIntoHtml(html: string, projectKey: string): string {
-  // projectKey 用 rootB64 当 stable id(给 inject.js 上报 postMessage 用)
+function injectIntoHtml(html: string, projectKey: string | number): string {
+  // projectKey 是数字(优先,匹配 sandboxBridge 的 number 检查)或 rootB64 string(fallback)
   const headInject = `<script>window.__previewProjectId=${JSON.stringify(projectKey)};</script>`;
   const tailInject = `<script src="/__aid_inject.js"></script>`;
 

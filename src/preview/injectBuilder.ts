@@ -19,15 +19,19 @@ export function previewUrl(
   bust: number | string = '',
   rootPath?: string | null
 ): string {
-  const q = bust ? `?t=${encodeURIComponent(bust)}` : '';
-
   if (rootPath && honoBaseUrl) {
     // Electron 模式:走 Hono native 路由,rootPath base64 编码进 URL
+    // **pid 也一并传**,让 Hono 注入 __previewProjectId 为 numeric IDB id,
+    // 否则 host 端 sandboxBridge 的 `typeof projectId === 'number'` 判定会丢弃消息
     const rootB64 = base64UrlEncode(rootPath);
-    return `${honoBaseUrl}/preview/r/${rootB64}/${path}${q}`;
+    const params = new URLSearchParams();
+    if (bust) params.set('t', String(bust));
+    params.set('pid', String(projectId));
+    return `${honoBaseUrl}/preview/r/${rootB64}/${path}?${params.toString()}`;
   }
 
   // SW 模式
+  const q = bust ? `?t=${encodeURIComponent(bust)}` : '';
   return `/preview/${projectId}/${path}${q}`;
 }
 

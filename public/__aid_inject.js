@@ -62,6 +62,40 @@
   });
 
   // ============================================================
+  // v6.2: Cmd/Ctrl + wheel 转发给 host
+  // iframe 内部的 wheel 不会冒泡到 host window,必须显式转发
+  // ============================================================
+  window.addEventListener(
+    'wheel',
+    function (ev) {
+      if (!(ev.ctrlKey || ev.metaKey)) return; // 普通滚动放过 — 让 iframe 内容自然滚
+      ev.preventDefault();
+      send({
+        type: 'wheel_zoom',
+        deltaY: ev.deltaY,
+        // iframe-local 坐标(相对 iframe 左上)
+        ifx: ev.clientX,
+        ify: ev.clientY,
+        ts: Date.now(),
+      });
+    },
+    { passive: false }
+  );
+
+  // 空格按住时,把 iframe 的鼠标事件 "让" 给 host(便于 stage 拖动)
+  // 通过 keydown 监听 + body 的 pointer-events 切换实现
+  window.addEventListener('keydown', function (e) {
+    if (e.code === 'Space' && !e.repeat) {
+      document.body.style.pointerEvents = 'none';
+    }
+  });
+  window.addEventListener('keyup', function (e) {
+    if (e.code === 'Space') {
+      document.body.style.pointerEvents = '';
+    }
+  });
+
+  // ============================================================
   // v2: 模式系统
   // ============================================================
   var MODE = 'preview'; // 'preview' | 'inspect' | 'comment' | 'edit'

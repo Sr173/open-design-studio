@@ -18,8 +18,10 @@ import { ALL_TOOLS, executeTool, type ToolExecCtx } from '../llm/tools';
 import {
   type QuestionSet,
   type QuestionAnswers,
+  type Question,
   formatAnswers,
 } from '../llm/questions';
+import { tryParseAskQuestionsPartial } from '../llm/streamingParse';
 import { loadPinnedMessages } from './pinned';
 import { touchChat, getChatTask } from './chats';
 import { getProjectBrief } from './projects';
@@ -44,6 +46,16 @@ export interface ErrorPrompt {
   errors: { message: string; ts: number }[];
 }
 
+export interface TodoItem {
+  /** 稳定 id,AI 用它 update */
+  id: string;
+  /** 命令式表述 — 列表显示用 */
+  content: string;
+  /** 现在进行时 — 状态为 in_progress 时高亮显示 */
+  activeForm: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
 export interface ChatState {
   running: boolean;
   writing: WritingState;
@@ -53,8 +65,18 @@ export interface ChatState {
   streamingMessageId: number | null;
   /** AI 推上来的待回答问卷;非 null 时中栏切到 Questions tab */
   pendingQuestions: QuestionSet | null;
+  /** v6.0g:ask_questions 流式期间的"半成品"问卷 — 每解析出一题就更新一次,
+   *  让用户看到 "AI 正在挑问题" 的过程,不是一下蹦出 5 题。
+   *  pendingQuestions 一旦 set,这个清空 */
+  streamingQuestions: {
+    toolUseId: string;
+    title: string;
+    questions: Question[];
+  } | null;
   /** v1.8.1:自查闭环触发中(static-check 周期内) — chat 顶 banner 显示 */
   selfCheckActive: boolean;
+  /** v6.1:AI 用 todo_write 维护的当前 chat 的多步任务清单 */
+  todos: TodoItem[];
 }
 
 export interface SendOpts {
@@ -118,7 +140,9 @@ export class ChatController {
     errorPrompt: null,
     streamingMessageId: null,
     pendingQuestions: null,
+    streamingQuestions: null,
     selfCheckActive: false,
+    todos: [],
   };
 
   private listeners = new Set<(s: ChatState) => void>();
@@ -394,7 +418,11 @@ export class ChatController {
       doneCalled = true;
     };
     const onAskQuestions = (set: QuestionSet) => {
-      this.patch({ pendingQuestions: set });
+      // 真问卷上来 → 清掉 streaming 半成品(数据相同,避免双重渲染)
+      this.patch({ pendingQuestions: set, streamingQuestions: null });
+    };
+    const onTodoUpdate = (todos: TodoItem[]) => {
+      this.patch({ todos });
     };
 
     try {
@@ -523,6 +551,7 @@ export class ChatController {
           onShow,
           onDone,
           onAskQuestions,
+          onTodoUpdate,
         };
 
         // 并行化:read_file / list_files / get_element_info 这种**纯查询**可并发;
@@ -531,6 +560,9 @@ export class ChatController {
           'read_file',
           'list_files',
           'get_element_info',
+          'read_source_file',
+          'list_source_files',
+          'search_files',
         ]);
 
         // 关键不变量:tool_result 顺序必须跟 tool_use 一致(Anthropic / OpenAI 协议)
@@ -641,13 +673,15 @@ export class ChatController {
         emitLock(this.projectId);
       }
 
-      // 退出 writing,刷一次预览
+      // 退出 writing,刷一次预览。若 streamingQuestions 仍残留(中断/lint 失败),清掉
       this.patch({
         running: false,
         writing: { active: false },
         streamingMessageId: null,
         refreshKey: this.state.refreshKey + 1,
+        streamingQuestions: this.state.pendingQuestions ? null : null,
       });
+      this.activeAskBuf = null;
       this.currentAbort = null;
 
       // === done 后自查闭环 ===
@@ -722,10 +756,44 @@ export class ChatController {
         name: d.name,
         input: {},
       });
+      // 流式 ask_questions:开个 buffer,逐字符喂
+      if (d.name === 'ask_questions') {
+        this.activeAskBuf = { id: d.id, buffer: '' };
+        this.patch({
+          streamingQuestions: { toolUseId: d.id, title: '加载中…', questions: [] },
+        });
+      }
       this.emitMsgs();
+    } else if (d.type === 'tool_call_args') {
+      // 累积 ask_questions args,边累边解析,新增 question 就 emit
+      if (this.activeAskBuf && this.activeAskBuf.id === d.id) {
+        this.activeAskBuf.buffer += d.chunk;
+        const partial = tryParseAskQuestionsPartial(this.activeAskBuf.buffer);
+        const prev = this.state.streamingQuestions;
+        // 只在题数 / title 真有变化时更新(避免高频 patch)
+        const titleChanged =
+          (partial.title ?? '') !== (prev?.title ?? '');
+        const lenChanged =
+          partial.questions.length !== (prev?.questions.length ?? 0);
+        if (titleChanged || lenChanged) {
+          this.patch({
+            streamingQuestions: {
+              toolUseId: d.id,
+              title: partial.title ?? '加载中…',
+              questions: partial.questions,
+            },
+          });
+        }
+      }
+    } else if (d.type === 'tool_call_end') {
+      if (this.activeAskBuf && this.activeAskBuf.id === d.id) {
+        this.activeAskBuf = null;
+      }
     }
-    // arg_delta / end 不更新 streamingBlocks(input 在 final 时一次性给)
   }
+
+  /** 流式 ask_questions 的当前 buffer */
+  private activeAskBuf: { id: string; buffer: string } | null = null;
 
   /** 当前 streaming buffer(给 ChatPane 实时显示) */
   getStreamingBlocks(): Block[] {

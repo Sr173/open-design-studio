@@ -24,15 +24,30 @@ export function MidPane({
   );
   const [tab, setTab] = useState<Tab>('preview');
 
-  // 来新问卷自动切过去
+  // 流式问卷或完整问卷都视为"有问卷"
+  const activeQuestionSet = state.pendingQuestions
+    ? { set: state.pendingQuestions, streaming: false }
+    : state.streamingQuestions
+    ? {
+        set: {
+          title: state.streamingQuestions.title,
+          questions: state.streamingQuestions.questions,
+          toolUseId: state.streamingQuestions.toolUseId,
+        },
+        streaming: true,
+      }
+    : null;
+
+  // 来新问卷自动切过去(流式第一题到来也切)
   useEffect(() => {
-    if (state.pendingQuestions) setTab('questions');
-  }, [state.pendingQuestions]);
+    if (activeQuestionSet && activeQuestionSet.set.questions.length > 0)
+      setTab('questions');
+  }, [activeQuestionSet?.set.questions.length]);
 
   // 没问卷时锁定 preview
   useEffect(() => {
-    if (!state.pendingQuestions && tab === 'questions') setTab('preview');
-  }, [state.pendingQuestions, tab]);
+    if (!activeQuestionSet && tab === 'questions') setTab('preview');
+  }, [activeQuestionSet, tab]);
 
   return (
     <div
@@ -47,7 +62,7 @@ export function MidPane({
       <TabBar
         tab={tab}
         setTab={setTab}
-        hasQuestions={!!state.pendingQuestions}
+        hasQuestions={!!activeQuestionSet}
       />
 
       {tab === 'preview' ? (
@@ -57,10 +72,11 @@ export function MidPane({
           writing={state.writing}
           initialPath={initialPath}
         />
-      ) : state.pendingQuestions ? (
+      ) : activeQuestionSet ? (
         <QuestionsPanel
-          set={state.pendingQuestions}
-          disabled={state.running}
+          set={activeQuestionSet.set}
+          disabled={activeQuestionSet.streaming || state.running}
+          streaming={activeQuestionSet.streaming}
           onSubmit={(answers) => controller.submitQuestionAnswers(answers)}
           onCancel={() => controller.cancelPendingQuestions()}
         />

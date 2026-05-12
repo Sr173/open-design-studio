@@ -18,11 +18,14 @@ export function QuestionsPanel({
   onSubmit,
   onCancel,
   disabled,
+  streaming,
 }: {
   set: QuestionSet;
   onSubmit: (answers: QuestionAnswers) => void;
   onCancel: () => void;
   disabled?: boolean;
+  /** AI 还在 stream 出问题 — 提交按钮显示"等待 AI 完成" */
+  streaming?: boolean;
 }) {
   const initial = useMemo<QuestionAnswers>(() => {
     const a: QuestionAnswers = {};
@@ -55,23 +58,61 @@ export function QuestionsPanel({
         style={{
           fontSize: 28,
           fontWeight: 500,
-          marginBottom: 32,
+          marginBottom: 8,
           letterSpacing: '-0.01em',
           lineHeight: 1.3,
         }}
       >
         {set.title}
+        {streaming && (
+          <span
+            style={{
+              marginLeft: 12,
+              fontSize: 13,
+              color: '#a89580',
+              fontWeight: 400,
+              verticalAlign: 'middle',
+            }}
+          >
+            <StreamingDot /> AI 正在挑问题…
+          </span>
+        )}
       </h1>
+      <div
+        style={{
+          color: '#a89580',
+          fontSize: 12,
+          marginBottom: 28,
+          fontFamily: 'var(--font-mono)',
+        }}
+      >
+        {set.questions.length} {set.questions.length === 1 ? 'question' : 'questions'}
+        {streaming && ' · 仍在生成,等会再答'}
+      </div>
 
-      {set.questions.map((q) => (
-        <QuestionView
-          key={q.id}
-          question={q}
-          value={answers[q.id]}
-          onChange={(v) => patch(q.id, v)}
-          onSkip={() => skip(q.id)}
-        />
+      {set.questions.map((q, i) => (
+        <FadeInWrap key={q.id} index={i}>
+          <QuestionView
+            question={q}
+            value={answers[q.id]}
+            onChange={(v) => patch(q.id, v)}
+            onSkip={() => skip(q.id)}
+          />
+        </FadeInWrap>
       ))}
+
+      {streaming && set.questions.length > 0 && (
+        <div
+          style={{
+            padding: '16px 0',
+            color: '#a89580',
+            fontSize: 13,
+            fontStyle: 'italic',
+          }}
+        >
+          <StreamingDot /> AI 还在生成…
+        </div>
+      )}
 
       <div
         style={{
@@ -83,20 +124,63 @@ export function QuestionsPanel({
       >
         <button
           onClick={onCancel}
-          disabled={disabled}
+          disabled={disabled || streaming}
           style={btnSecondary}
         >
           关闭
         </button>
         <button
           onClick={() => onSubmit(answers)}
-          disabled={disabled}
-          style={btnPrimary}
+          disabled={disabled || streaming}
+          style={streaming ? { ...btnPrimary, opacity: 0.5, cursor: 'wait' } : btnPrimary}
+          title={streaming ? '等 AI 把问题问完' : ''}
         >
-          提交答案 →
+          {streaming ? '⏳ 等待 AI 完成' : '提交答案 →'}
         </button>
       </div>
     </div>
+  );
+}
+
+/** 简单的逐题淡入(纯 CSS,无第三方动画库)*/
+function FadeInWrap({ index, children }: { index: number; children: React.ReactNode }) {
+  return (
+    <>
+      <style>{`@keyframes aidQFadeIn {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+      }`}</style>
+      <div
+        style={{
+          animation: `aidQFadeIn 280ms ease-out both`,
+          animationDelay: `${Math.min(index * 50, 300)}ms`,
+        }}
+      >
+        {children}
+      </div>
+    </>
+  );
+}
+
+function StreamingDot() {
+  return (
+    <>
+      <style>{`@keyframes aidStreamDot {
+        0%, 80%, 100% { opacity: 0.3; }
+        40% { opacity: 1; }
+      }`}</style>
+      <span
+        style={{
+          display: 'inline-block',
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: '#d4a574',
+          marginRight: 4,
+          animation: 'aidStreamDot 1.4s ease-in-out infinite',
+        }}
+      />
+    </>
   );
 }
 

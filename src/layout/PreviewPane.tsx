@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { onPreviewMessage, type PreviewMessage } from '../preview/sandboxBridge';
 import { previewUrl } from '../preview/injectBuilder';
 import { getElementBridge, type PreviewMode } from '../preview/elementBridge';
+import { useCanvasPanZoom } from '../preview/useCanvasPanZoom';
 import { ModeToggle } from './ModeToggle';
 import { CommentBubble } from '../inspect/commentBubble';
 import { installInlineEdit } from '../inspect/inlineEdit';
@@ -311,6 +312,8 @@ export function PreviewPane({
           url={url}
           refreshKey={refreshKey}
           writingActive={!!writing?.active}
+          projectId={projectId}
+          mode={bridgeState.mode}
         >
           {writing?.active && <WritingOverlay file={writing.currentFile} />}
 
@@ -358,6 +361,8 @@ function PreviewStage({
   url,
   refreshKey,
   writingActive,
+  projectId,
+  mode,
   children,
 }: {
   viewport: ViewportPreset;
@@ -365,41 +370,50 @@ function PreviewStage({
   url: string;
   refreshKey: number;
   writingActive: boolean;
+  projectId: number;
+  mode: PreviewMode;
   children?: React.ReactNode;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
 
-  // 计算 scale = 容器尺寸 / iframe 设计尺寸,取较小者
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-    const recalc = () => {
-      const cw = wrap.clientWidth;
-      const ch = wrap.clientHeight;
-      const padding = 32;
-      const sx = (cw - padding) / viewport.width;
-      const sy = (ch - padding) / viewport.height;
-      const next = Math.min(1, sx, sy);
-      setScale(Math.max(0.2, next));
-    };
-    recalc();
-    const ro = new ResizeObserver(recalc);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [viewport]);
+  // Preview 模式 = hand tool;其它模式(inspect/comment/edit)留出 iframe 交互,
+  // 只在空格 / 中键 / Cmd 时进入 pan
+  const handMode = mode === 'preview' && !writingActive;
 
-  // F 全屏 / Esc 退出
+  const pz = useCanvasPanZoom({
+    wrapRef,
+    contentWidth: viewport.width,
+    contentHeight: viewport.height,
+    handMode,
+  });
+
+  // F 全屏 / Esc — 只剩 fullscreen 这俩本地状态,其它全走 useCanvasPanZoom
   useEffect(() => {
+    const isEditable = (t: EventTarget | null) =>
+      t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (isEditable(e.target)) return;
       if (e.key === 'f' || e.key === 'F') setFullscreen((v) => !v);
       if (e.key === 'Escape' && fullscreen) setFullscreen(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [fullscreen]);
+
+  // 切 viewport 自动 reset(让 auto-fit 重算)
+  useEffect(() => {
+    pz.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewport]);
+
+  // iframe 转发的 wheel_zoom — hook 内部用 ref 读最新 pan/scale,closure 不会失效
+  useEffect(() => {
+    return onPreviewMessage(projectId, (msg) => {
+      if (msg.type !== 'wheel_zoom') return;
+      pz.zoomAtIframeLocal(msg.ifx, msg.ify, msg.deltaY);
+    });
+  }, [projectId, pz.zoomAtIframeLocal]);
 
   const stageStyle: React.CSSProperties = fullscreen
     ? {
@@ -414,81 +428,131 @@ function PreviewStage({
         position: 'relative',
         overflow: 'hidden',
         minHeight: 0,
+        cursor: pz.dragging
+          ? 'grabbing'
+          : pz.spaceHeld || handMode
+            ? 'grab'
+            : 'default',
       };
 
-  const effectiveScale = fullscreen ? 1 : scale;
-  const scaledW = viewport.width * effectiveScale;
-  const scaledH = viewport.height * effectiveScale;
+  const effectiveScale = fullscreen ? 1 : pz.scale;
+  const effectivePan = fullscreen ? { x: 0, y: 0 } : { x: pz.panX, y: pz.panY };
+  const showZoomPill = !fullscreen && pz.isFree;
 
   return (
-    <div ref={wrapRef} style={stageStyle} onDoubleClick={() => setFullscreen((v) => !v)}>
+    <div
+      ref={wrapRef}
+      style={{
+        ...stageStyle,
+        backgroundImage: fullscreen
+          ? undefined
+          : `radial-gradient(circle, rgba(255,255,255,0.05) 1px, transparent 1px)`,
+        backgroundSize: '20px 20px',
+        backgroundPosition: `${effectivePan.x % 20}px ${effectivePan.y % 20}px`,
+      }}
+      onDoubleClick={(e) => {
+        // 在 stage 空白处 dblclick 切全屏(iframe 区域不触发)
+        if (e.target === wrapRef.current) setFullscreen((v) => !v);
+      }}
+    >
+      {/* 单一 artwork wrapper:translate + scale,origin top-left */}
       <div
         style={{
           position: 'absolute',
-          inset: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 'var(--sp-4)',
+          left: 0,
+          top: 0,
+          width: viewport.width,
+          height: viewport.height,
+          transform: `translate(${effectivePan.x}px, ${effectivePan.y}px) scale(${effectiveScale})`,
+          transformOrigin: '0 0',
+          boxShadow: 'var(--shadow-md)',
+          borderRadius: 'var(--radius-md)',
+          overflow: 'hidden',
+          willChange: pz.dragging ? 'transform' : undefined,
         }}
       >
-        <div
+        <iframe
+          ref={iframeRef}
+          key={refreshKey}
+          src={url}
           style={{
-            width: scaledW,
-            height: scaledH,
-            position: 'relative',
-            boxShadow: 'var(--shadow-md)',
+            width: viewport.width,
+            height: viewport.height,
+            border: '1px solid var(--border-subtle)',
             borderRadius: 'var(--radius-md)',
-            overflow: 'hidden',
-            // 全屏 + 用户切到 viewport 真实大小:出滚动条;否则永不出
-            ...(fullscreen && (viewport.width > window.innerWidth || viewport.height > window.innerHeight)
-              ? { overflow: 'auto' }
-              : null),
+            background: '#fff',
+            display: 'block',
+            // preview 模式 = hand tool;writing/drag/space 期间也禁交互让事件落到 stage
+            pointerEvents:
+              writingActive || pz.dragging || pz.spaceHeld || handMode
+                ? 'none'
+                : 'auto',
           }}
-        >
-          <iframe
-            ref={iframeRef}
-            key={refreshKey}
-            src={url}
-            style={{
-              width: viewport.width,
-              height: viewport.height,
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--radius-md)',
-              background: '#fff',
-              display: 'block',
-              transform: `scale(${effectiveScale})`,
-              transformOrigin: '0 0',
-              pointerEvents: writingActive ? 'none' : 'auto',
-            }}
-            title="preview"
-          />
-          {/* overlays 渲染在 scaled wrapper 内,跟 iframe 一起被缩放… 不行,要逻辑像素 */}
-        </div>
+          title="preview"
+        />
       </div>
       {/* overlays 在 stage 顶层(不被 scale 影响) */}
       {children}
       {!fullscreen && (
-        <button
-          onClick={() => setFullscreen(true)}
-          title="全屏(双击预览或按 F)"
+        <div
           style={{
             position: 'absolute',
             top: 8,
             right: 8,
             zIndex: 5,
-            padding: '4px 8px',
-            background: 'rgba(0,0,0,0.4)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 4,
-            fontSize: 11,
-            fontFamily: 'var(--font-mono)',
-            cursor: 'pointer',
+            display: 'flex',
+            gap: 6,
+            alignItems: 'center',
           }}
         >
-          ⤢ F
-        </button>
+          {/* 缩放 pill — 显示当前比例 + 快捷缩放按钮 */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              background: 'rgba(0,0,0,0.4)',
+              borderRadius: 4,
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+              color: '#fff',
+              overflow: 'hidden',
+            }}
+            title={
+              '空格 + 拖动 = 平移 · 中键拖动 = 平移 · ⌘/Ctrl + 滚轮 = 缩放 · ⌘0 = 重置 · trackpad pinch = 缩放 · F = 全屏'
+            }
+          >
+            <button onClick={() => pz.zoomBy(0.8)} style={zoomBtn} title="缩小 (⌘-)">
+              −
+            </button>
+            <span style={{ padding: '4px 6px', minWidth: 36, textAlign: 'center' }}>
+              {showZoomPill ? `${Math.round(pz.scale * 100)}%` : 'fit'}
+            </span>
+            <button onClick={() => pz.zoomBy(1.25)} style={zoomBtn} title="放大 (⌘+)">
+              +
+            </button>
+            {showZoomPill && (
+              <button onClick={() => pz.reset()} style={zoomBtn} title="回到 fit-to-view(⌘0)">
+                ⤢
+              </button>
+            )}
+          </div>
+          <button
+            onClick={() => setFullscreen(true)}
+            title="全屏(双击预览或按 F)"
+            style={{
+              padding: '4px 8px',
+              background: 'rgba(0,0,0,0.4)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 4,
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+              cursor: 'pointer',
+            }}
+          >
+            ⤢ F
+          </button>
+        </div>
       )}
       {fullscreen && (
         <button
@@ -549,37 +613,36 @@ function VariantCanvas({
       for (const d of detachers) d();
     };
   }, [bridge, refreshKey, variants.map((v) => v.slug).join('|')]);
-  const [wrapWidth, setWrapWidth] = useState(0);
-  const [wrapHeight, setWrapHeight] = useState(0);
 
-  useEffect(() => {
-    const w = wrapRef.current;
-    if (!w) return;
-    const recalc = () => {
-      setWrapWidth(w.clientWidth);
-      setWrapHeight(w.clientHeight);
-    };
-    recalc();
-    const ro = new ResizeObserver(recalc);
-    ro.observe(w);
-    return () => ro.disconnect();
-  }, []);
-
-  // 每个 variant iframe 用 1280x800 设计宽度
+  // 每个 variant artboard 设计尺寸固定 1280×800;横向排列;variant 之间 24px gap
   const DESIGN_W = 1280;
   const DESIGN_H = 800;
-  const gap = 16;
-  const labelH = 36;
-  const padding = 24;
+  const GAP = 48;
+  const LABEL_H = 32;
 
-  // 横向排开,每个 cell width = (wrapWidth - padding*2 - gap*(n-1)) / n
-  const cellW = Math.max(
-    240,
-    (wrapWidth - padding * 2 - gap * (variants.length - 1)) / variants.length
-  );
-  const scale = Math.min(1, cellW / DESIGN_W);
-  const cellH = DESIGN_H * scale + labelH + 8;
-  const fits = cellH + padding * 2 <= wrapHeight;
+  // 总 content 尺寸(供 useCanvasPanZoom 算 auto-fit)
+  const totalW = variants.length * DESIGN_W + (variants.length - 1) * GAP;
+  const totalH = DESIGN_H + LABEL_H + 8;
+
+  // pan + zoom 引擎(canvas 模式默认就是 hand mode)
+  const pz = useCanvasPanZoom({
+    wrapRef,
+    contentWidth: totalW,
+    contentHeight: totalH,
+    padding: 48,
+    handMode: true,
+  });
+
+  // 订阅 iframe 转发的 wheel_zoom — 任意 variant iframe 都用同一套 pan/zoom
+  useEffect(() => {
+    return onPreviewMessage(projectId, (msg) => {
+      if (msg.type !== 'wheel_zoom') return;
+      // msg.ifx/ify 是 iframe-local;但我们不知道是哪个 variant 发的
+      // 简化:把它视为该 variant 的左上 + 偏移,直接当 wrap-local 加上 panX/panY(粗略)
+      // 更精确:在 iframe 注入 variant slug,这里映射到 left offset。当前先粗略,等用户精确反馈
+      pz.zoomAtIframeLocal(msg.ifx, msg.ify, msg.deltaY);
+    });
+  }, [projectId, pz.zoomAtIframeLocal]);
 
   return (
     <div
@@ -587,45 +650,55 @@ function VariantCanvas({
       style={{
         flex: 1,
         position: 'relative',
-        overflow: fits ? 'hidden' : 'auto',
+        overflow: 'hidden',
         minHeight: 0,
+        background: 'var(--bg-base)',
+        backgroundImage: `radial-gradient(circle, rgba(255,255,255,0.05) 1px, transparent 1px)`,
+        backgroundSize: '20px 20px',
+        backgroundPosition: `${pz.panX % 20}px ${pz.panY % 20}px`,
+        cursor: pz.dragging ? 'grabbing' : 'grab',
       }}
     >
+      {/* 整个 multi-variant content,作为单一可变换层 */}
       <div
         style={{
-          display: 'flex',
-          gap,
-          padding,
-          alignItems: 'flex-start',
-          justifyContent: 'center',
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: totalW,
+          height: totalH,
+          transform: `translate(${pz.panX}px, ${pz.panY}px) scale(${pz.scale})`,
+          transformOrigin: '0 0',
+          willChange: pz.dragging ? 'transform' : undefined,
         }}
       >
         {variants.map((v, i) => {
           const letter = String.fromCharCode(65 + i);
+          const left = i * (DESIGN_W + GAP);
           return (
             <div
               key={v.slug}
               style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-                width: cellW,
-                flex: '0 0 auto',
+                position: 'absolute',
+                left,
+                top: 0,
+                width: DESIGN_W,
+                height: DESIGN_H + LABEL_H + 8,
               }}
             >
               <div
                 style={{
-                  height: labelH,
+                  height: LABEL_H,
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
                   padding: '0 var(--sp-2)',
-                  fontSize: 'var(--fs-xs)',
+                  fontSize: 14,
                   fontFamily: 'var(--font-mono)',
                   color: 'var(--text-secondary)',
                 }}
               >
-                <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                <span style={{ color: 'var(--accent)', fontWeight: 600, fontSize: 14 }}>
                   {letter}
                 </span>
                 <span
@@ -645,14 +718,17 @@ function VariantCanvas({
                       .join('\n') || v.slug
                   }
                 >
-                  {v.displayName}
+                  {v.displayName ?? v.slug}
                 </span>
                 <button
                   onClick={() => onFocusVariant(v.slug)}
                   style={{
-                    padding: '2px 6px',
-                    fontSize: 'var(--fs-xs)',
+                    padding: '2px 8px',
+                    fontSize: 13,
                     color: 'var(--text-tertiary)',
+                    background: 'transparent',
+                    border: 0,
+                    cursor: 'pointer',
                   }}
                   title="单变体焦点模式"
                 >
@@ -661,14 +737,15 @@ function VariantCanvas({
               </div>
               <div
                 style={{
-                  width: cellW,
-                  height: DESIGN_H * scale,
+                  width: DESIGN_W,
+                  height: DESIGN_H,
                   position: 'relative',
                   background: '#fff',
                   borderRadius: 'var(--radius-md)',
                   border: '1px solid var(--border-subtle)',
                   boxShadow: 'var(--shadow-md)',
                   overflow: 'hidden',
+                  marginTop: 8,
                 }}
               >
                 <iframe
@@ -683,9 +760,9 @@ function VariantCanvas({
                     height: DESIGN_H,
                     border: 'none',
                     background: '#fff',
-                    transform: `scale(${scale})`,
-                    transformOrigin: '0 0',
-                    pointerEvents: writingActive ? 'none' : 'auto',
+                    display: 'block',
+                    // canvas 模式整个就是 hand,iframe 始终非交互让 drag 透过去
+                    pointerEvents: writingActive || pz.dragging ? 'none' : 'auto',
                   }}
                   title={`preview ${v.slug}`}
                 />
@@ -693,6 +770,44 @@ function VariantCanvas({
             </div>
           );
         })}
+      </div>
+
+      {/* zoom pill */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 8,
+          right: 8,
+          zIndex: 5,
+          display: 'flex',
+          gap: 6,
+          alignItems: 'center',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            background: 'rgba(0,0,0,0.4)',
+            borderRadius: 4,
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+            color: '#fff',
+            overflow: 'hidden',
+          }}
+          title="拖动 = 平移 · ⌘/Ctrl + 滚轮 = 缩放 · ⌘0 = 重置 · 双击 ⤢ = focus 单变体"
+        >
+          <button onClick={() => pz.zoomBy(0.8)} style={zoomBtn} title="缩小 (⌘-)">−</button>
+          <span style={{ padding: '4px 6px', minWidth: 36, textAlign: 'center' }}>
+            {pz.isFree ? `${Math.round(pz.scale * 100)}%` : 'fit'}
+          </span>
+          <button onClick={() => pz.zoomBy(1.25)} style={zoomBtn} title="放大 (⌘+)">+</button>
+          {pz.isFree && (
+            <button onClick={() => pz.reset()} style={zoomBtn} title="回到 fit-to-view(⌘0)">
+              ⤢
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -961,3 +1076,17 @@ function ConsoleBar({
     </div>
   );
 }
+
+const zoomBtn: React.CSSProperties = {
+  width: 24,
+  height: 24,
+  display: 'grid',
+  placeItems: 'center',
+  background: 'rgba(255,255,255,0.06)',
+  color: '#fff',
+  border: 'none',
+  cursor: 'pointer',
+  fontSize: 13,
+  fontFamily: 'inherit',
+  lineHeight: 1,
+};

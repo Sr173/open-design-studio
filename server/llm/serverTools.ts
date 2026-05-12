@@ -141,6 +141,118 @@ export function dropOrphanServerToolUses(
   return out;
 }
 
+// ============================================================
+// Tool-result compaction
+//
+// 老的 + 大的 read_file / list / search 类 tool_result 在 context 里浪费 token,
+// 大多数情况 AI 不再 reference,纯占位。这里在送 LLM 前做一个 pre-pass:
+//   - 保留最近 KEEP_RECENT_TURNS 个 user 消息及其后所有 message
+//   - 之前的 message 里,所有 tool_result.content 超过 COMPACT_THRESHOLD 字符 → 替换成 stub
+//   - 同 tool_use_id 仍保留,确保 Anthropic API tool_use/tool_result 配对约束不破
+//
+// 收益:
+//   - Opus 4.7 input $15/M token,5 个 50KB read 留着 = 每轮多 ~$1
+//   - 输入越短 TTFT 越快(Anthropic 影响明显)
+//   - 老内容不干扰 attention,模型决策更聚焦
+// ============================================================
+
+/** content 字符数超此值 + 在最近 N 个 user 消息之前的 message → compact */
+const COMPACT_THRESHOLD = 2000;
+/** 保留最近多少个 user 消息及其后的所有 message 不动 */
+const KEEP_RECENT_TURNS = 2;
+
+/** 智能压缩老 tool_result。返回新数组(原数组不变)+ 压缩统计供日志 */
+export function compactOldToolResults(
+  messages: Array<{ role: 'user' | 'assistant'; blocks: Block[] }>
+): {
+  messages: Array<{ role: 'user' | 'assistant'; blocks: Block[] }>;
+  compacted: number;
+  bytesSaved: number;
+} {
+  // 1. 找最近 KEEP_RECENT_TURNS 个 user 消息位置(从后往前)
+  let keepFromIdx = messages.length;
+  let userSeen = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      userSeen++;
+      if (userSeen >= KEEP_RECENT_TURNS) {
+        keepFromIdx = i;
+        break;
+      }
+    }
+  }
+  // 2. 同 path 多次 read → 只留最近那次(基于 tool_use 的 input.path)
+  //    收集所有 tool_use_id → path(从 assistant 找)
+  const useIdToPath = new Map<string, string>();
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue;
+    for (const b of m.blocks) {
+      if (b.type !== 'tool_use') continue;
+      const inp: any = b.input;
+      // read_file / read_source_file / edit_file 都带 path
+      if (typeof inp?.path === 'string') {
+        useIdToPath.set(b.id, `${b.name}:${inp.path}`);
+      }
+    }
+  }
+  // 找每个 path 的最新 tool_use id(即"最后一次 read 同文件")
+  const latestByPath = new Map<string, string>();
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue;
+    for (const b of m.blocks) {
+      if (b.type !== 'tool_use') continue;
+      const k = useIdToPath.get(b.id);
+      if (k) latestByPath.set(k, b.id);
+    }
+  }
+
+  let compacted = 0;
+  let bytesSaved = 0;
+
+  const next = messages.map((m, idx) => {
+    if (m.role !== 'user') return m;
+    let touched = false;
+    const blocks = m.blocks.map((b) => {
+      if (b.type !== 'tool_result') return b;
+      // 永远不动 server-managed(它们已被 rehydrate 重建,且 placeholder 本身很短)
+      // 通过查 assistant 里对应 tool_use 的 name 判定
+      // 简化:跳过短 result
+      const contentStr =
+        typeof b.content === 'string'
+          ? b.content
+          : Array.isArray(b.content)
+            ? (b.content as any[])
+                .map((c: any) => (c?.type === 'text' ? c.text : ''))
+                .join('\n')
+            : '';
+      if (contentStr.length < COMPACT_THRESHOLD) return b;
+
+      // 判定 1:在最近 N 个 user 之前(老)→ 候选 compact
+      const isOld = idx < keepFromIdx;
+      // 判定 2:同 path 有更新的 read → 候选 compact(即使最近的)
+      const pathKey = useIdToPath.get(b.tool_use_id);
+      const supersededByNewer = pathKey && latestByPath.get(pathKey) !== b.tool_use_id;
+
+      if (!isOld && !supersededByNewer) return b;
+
+      const reason = supersededByNewer ? 'superseded by newer read' : 'aged out';
+      const stub =
+        `[content elided — ${pathKey ?? 'tool_result'}(${contentStr.length.toLocaleString()} chars, ${reason}). ` +
+        `Re-call the tool if you need this content.]`;
+      bytesSaved += contentStr.length - stub.length;
+      compacted++;
+      touched = true;
+      return {
+        ...b,
+        content: stub,
+      };
+    });
+    return touched ? { ...m, blocks: blocks } : m;
+  });
+
+  return { messages: next, compacted, bytesSaved };
+}
+
 /** 入 LLM 前重建:把 client 传来的 messages 里 server-tool 的 placeholder 还原成真内容 */
 export function rehydrateServerToolResults(
   messages: Array<{ role: 'user' | 'assistant'; blocks: Block[] }>

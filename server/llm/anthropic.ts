@@ -38,7 +38,7 @@ export class AnthropicProvider implements LLMProvider {
       systemChars: system.length,
       msgCount: messages.length,
       toolCount: tools.length,
-      maxTokens: req.maxTokens ?? 8192,
+      maxTokens: req.maxTokens ?? 128_000,
     };
     console.log('[anthropic] →', reqMeta);
 
@@ -47,12 +47,18 @@ export class AnthropicProvider implements LLMProvider {
       stream = this.client.messages.stream(
         {
           model: this.model,
-          max_tokens: req.maxTokens ?? 8192,
+          max_tokens: req.maxTokens ?? 128_000,
           system,
           messages,
           tools: tools.length ? tools : undefined,
         },
-        { signal: req.signal }
+        {
+          signal: req.signal,
+          headers: {
+            // Opus 4.7 默认 32k 输出;加这个 beta 拉到 128k(uniapi 实测已支持)
+            'anthropic-beta': 'output-128k-2025-02-19',
+          },
+        }
       );
     } catch (e: any) {
       console.error('[anthropic] stream-create 失败:', {

@@ -1,0 +1,393 @@
+/* workbench.css — v6.1 工作台原型 atom 样式
+ *
+ * 沿用 tokens.css 的色板和字号阶,补充 dense workbench 风的 atoms:
+ *   - .wb-pill / .wb-kbd / .wb-dot — 元数据胶囊与状态点
+ *   - .wb-meter / .wb-tokbar      — 顶部 turn / token / autosave 仪表
+ *   - .wb-sb-*                    — 底部 status bar 分组
+ *   - .wb-traffic / .wb-cmdk-btn  — 顶部红绿灯 + ⌘K 入口
+ *   - .wb-glass                   — 玻璃 dock 通用 utility
+ *   - .wb-tool-block              — chat 内 tool 调用块 (lines/bytes/diff)
+ *   - .wb-thinking                — thinking 折叠块
+ *   - .wb-stage-bg                — 画布底的微暖辐射
+ *
+ * 所有类名前缀 wb- 防与现有 src/layout/* 内联样式冲突
+ */
+
+/* ───────── 元数据 atoms ───────── */
+.wb-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+}
+.wb-pill.accent {
+  color: var(--accent);
+  background: rgba(255,164,81,0.14);
+  border-color: rgba(255,164,81,0.32);
+}
+.wb-pill.success { color: var(--success); border-color: rgba(110,201,143,0.28); background: rgba(110,201,143,0.10); }
+.wb-pill.warn    { color: var(--warning); border-color: rgba(255,204,102,0.28); background: rgba(255,204,102,0.10); }
+.wb-pill.error   { color: var(--error); border-color: rgba(255,107,107,0.28); background: rgba(255,107,107,0.10); }
+
+.wb-kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-bottom-width: 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.wb-kbd.sm { height: 14px; font-size: 9px; padding: 0 4px; min-width: 16px; border-bottom-width: 1px; }
+
+.wb-dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.wb-dot.live { background: var(--accent); box-shadow: 0 0 0 3px rgba(255,164,81,0.14); animation: wb-pulse 1.6s ease-in-out infinite; }
+.wb-dot.ok   { background: var(--success); }
+.wb-dot.warn { background: var(--warning); }
+.wb-dot.err  { background: var(--error); }
+
+@keyframes wb-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* ───────── 顶部 traffic lights(macOS 风) ───────── */
+.wb-traffic { display: flex; gap: 7px; }
+.wb-traffic span { width: 11px; height: 11px; border-radius: 50%; background: var(--border-default); }
+.wb-traffic span:nth-child(1) { background: #ff6b6b; }
+.wb-traffic span:nth-child(2) { background: #ffcc66; }
+.wb-traffic span:nth-child(3) { background: #6ec98f; }
+
+/* ───────── 顶部 meters(turn / token / autosave) ───────── */
+.wb-meter { display: flex; align-items: center; gap: 5px; }
+.wb-meter .lbl {
+  color: var(--text-disabled);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 9px;
+}
+.wb-meter .val { color: var(--text-secondary); }
+.wb-meter .val.accent { color: var(--accent); }
+.wb-meter .val.ok { color: var(--success); }
+
+/* token 占用进度条 (~60px wide) */
+.wb-tokbar {
+  position: relative;
+  width: 56px; height: 4px;
+  border-radius: 2px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+.wb-tokbar .fill {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  background: linear-gradient(90deg, var(--success), var(--accent));
+  transition: width 200ms ease;
+}
+
+/* turn 序号小 kbd */
+.wb-turn-pill {
+  display: inline-flex; align-items: center;
+  height: 16px; padding: 0 5px;
+  border-radius: 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+}
+.wb-turn-pill .n { color: var(--text-primary); font-weight: 700; }
+
+/* ───────── ⌘K 入口按钮 ───────── */
+.wb-cmdk-btn {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 6px 3px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  min-width: 200px;
+  cursor: pointer;
+  transition: border-color 100ms, color 100ms;
+}
+.wb-cmdk-btn .placeholder { flex: 1; }
+.wb-cmdk-btn:hover { border-color: var(--border-default); color: var(--text-secondary); }
+
+/* ───────── 通用 icon btn ───────── */
+.wb-icon-btn {
+  width: 24px; height: 24px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-xs);
+  color: var(--text-tertiary);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+}
+.wb-icon-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+.wb-icon-btn.on { background: rgba(255,164,81,0.14); color: var(--accent); }
+
+/* ───────── Stage 微暖辐射 ───────── */
+.wb-stage-bg {
+  background:
+    radial-gradient(ellipse at 50% -20%, rgba(255,164,81,0.05), transparent 50%),
+    var(--bg-base);
+}
+
+/* ───────── Glass dock 通用 ───────── */
+.wb-glass {
+  background: rgba(21, 23, 28, 0.92);
+  backdrop-filter: blur(16px) saturate(130%);
+  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  border: 1px solid var(--border-default);
+  box-shadow:
+    0 20px 60px rgba(0,0,0,0.55),
+    0 0 0 1px rgba(255,255,255,0.04) inset;
+}
+.wb-glass.light {
+  background: rgba(28, 31, 38, 0.88);
+  backdrop-filter: blur(12px) saturate(120%);
+}
+
+/* ───────── Status Bar(底部 22px)───────── */
+.wb-statusbar {
+  display: flex; align-items: center; gap: 0;
+  padding: 0 8px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-tertiary);
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  height: 22px;
+  flex: 0 0 22px;
+}
+.wb-sb-grp { display: flex; align-items: center; height: 100%; }
+.wb-sb-grp + .wb-sb-grp { margin-left: 6px; }
+.wb-sb-grp + .wb-sb-grp::before {
+  content: ""; width: 1px; height: 12px;
+  background: var(--border-subtle);
+  margin-right: 6px;
+}
+.wb-sb {
+  display: flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 7px;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+}
+.wb-sb:hover { background: var(--bg-elevated); color: var(--text-primary); }
+.wb-sb b { color: var(--text-primary); font-weight: 600; }
+.wb-sb .ok    { color: var(--success); }
+.wb-sb .warn  { color: var(--warning); }
+.wb-sb .err   { color: var(--error); }
+.wb-sb .acc   { color: var(--accent); }
+.wb-sb .lbl {
+  color: var(--text-disabled);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 8px;
+}
+.wb-sb-spacer { flex: 1; }
+
+/* ───────── Canvas frame ───────── */
+.wb-canvas-frame {
+  flex: 1;
+  display: flex; flex-direction: column;
+  min-height: 0;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+  position: relative;
+}
+.wb-canvas-frame-bar {
+  height: 30px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 10px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.wb-canvas-frame-bar .wb-traffic span { width: 9px; height: 9px; }
+
+/* viewport 输入 + zoom */
+.wb-vp-input {
+  display: flex; align-items: center;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  height: 20px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.wb-vp-input input {
+  width: 40px;
+  height: 100%;
+  padding: 0 4px;
+  text-align: right;
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  border: none;
+  outline: none;
+}
+.wb-vp-input .x { color: var(--text-disabled); padding: 0 2px; }
+.wb-vp-presets {
+  display: flex;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  height: 20px;
+  overflow: hidden;
+}
+.wb-vp-presets button {
+  padding: 0 7px;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  cursor: pointer;
+}
+.wb-vp-presets button + button { border-left: 1px solid var(--border-subtle); }
+.wb-vp-presets button.active { background: var(--bg-elevated); color: var(--text-primary); }
+
+.wb-zoom {
+  display: flex; align-items: center; gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+.wb-zoom .icon { color: var(--text-disabled); font-size: 10px; }
+.wb-zoom .val { min-width: 28px; text-align: right; color: var(--text-primary); }
+
+/* ───────── Variant Tray(浮动左下) ───────── */
+.wb-variant-tray {
+  display: flex; align-items: stretch;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font-size: 10px;
+}
+.wb-vt {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px 7px 8px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--border-subtle);
+  text-align: left;
+  min-width: 0;
+  cursor: pointer;
+  font: inherit;
+}
+.wb-vt:last-child { border-right: none; }
+.wb-vt:hover { background: rgba(255,255,255,0.04); color: var(--text-primary); }
+.wb-vt.active { background: rgba(255,164,81,0.14); color: var(--accent); }
+.wb-vt .thumb {
+  width: 32px; height: 22px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #fff1e3, #ffd9b3);
+  position: relative;
+  overflow: hidden;
+}
+.wb-vt .thumb::after {
+  content: ""; position: absolute; left: 4px; top: 4px;
+  width: 60%; height: 2px;
+  background: rgba(0,0,0,0.18);
+  border-radius: 1px;
+  box-shadow:
+    0 4px 0 0 rgba(0,0,0,0.12),
+    0 8px 0 0 rgba(0,0,0,0.10);
+}
+.wb-vt .meta { display: flex; flex-direction: column; gap: 1px; line-height: 1.2; min-width: 0; }
+.wb-vt .letter {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--text-disabled);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+}
+.wb-vt.active .letter { color: var(--accent); }
+.wb-vt .name {
+  font-size: var(--fs-xs);
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 130px;
+}
+.wb-vt.active .name { color: var(--accent); }
+.wb-vt .stats {
+  display: flex; gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-tertiary);
+}
+.wb-vt .stats .ago { color: var(--text-disabled); }
+
+/* turn timeline mini */
+.wb-turn-mini {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px;
+  border-left: 1px solid var(--border-default);
+  background: rgba(0,0,0,0.18);
+}
+.wb-turn-mini .lbl {
+  color: var(--text-disabled);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.wb-turn-mini .bars {
+  display: flex; align-items: flex-end; gap: 2px;
+  height: 22px;
+}
+.wb-turn-mini .bars b {
+  width: 3px;
+  background: var(--text-disabled);
+  border-radius: 1px;
+  display: block;
+}
+.wb-turn-mini .bars b.acc { background: var(--accent); }
+.wb-turn-mini .bars b.warn { background: var(--warning); }
+.wb-turn-mini .nums {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-tertiary);
+  line-height: 1.2;
+}
+.wb-turn-mini .nums .cur { color: var(--text-primary); font-weight: 600; }
+.wb-turn-mini .nums .avg { color: var(--text-disabled); }

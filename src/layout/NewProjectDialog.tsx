@@ -1,7 +1,8 @@
 /* 新建项目对话框
  *
- *  浏览器版:只能建虚拟项目(IDB)
- *  Electron 版:两种选项 — 空白虚拟项目 / 选本地文件夹
+ * v6.0g 模型:每个项目必须绑一个真实本地文件夹,AI 产物落到 <root>/.design/
+ *
+ * 浏览器版无法选文件夹 — 显示提示让用户切到 Electron 桌面 App
  */
 
 import { useState } from 'react';
@@ -10,7 +11,7 @@ import { native, isElectron } from '../native';
 export interface NewProjectDialogProps {
   open: boolean;
   onClose(): void;
-  onCreate(opts: { name: string; rootPath: string | null }): void;
+  onCreate(opts: { name: string; rootPath: string }): void;
 }
 
 export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogProps) {
@@ -33,9 +34,8 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
     try {
       await n.fs.validateRoot(p);
       setPickedPath(p);
-      // 默认项目名 = 文件夹名
       if (!name) {
-        const base = p.split(/[/\\]/).filter(Boolean).pop() || '未命名项目';
+        const base = p.split(/[/\\]/).filter(Boolean).pop() || '项目';
         setName(base);
       }
     } catch (e: any) {
@@ -52,9 +52,10 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
     setError(null);
   }
 
-  function submit(rootPath: string | null) {
-    const finalName = name.trim() || (rootPath ? rootPath.split(/[/\\]/).pop() ?? '未命名项目' : '未命名项目');
-    onCreate({ name: finalName, rootPath });
+  function submit() {
+    if (!pickedPath) return;
+    const finalName = name.trim() || pickedPath.split(/[/\\]/).pop() || '未命名项目';
+    onCreate({ name: finalName, rootPath: pickedPath });
     reset();
     onClose();
   }
@@ -66,27 +67,45 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
           新建项目
         </h3>
 
-        <label style={labelStyle}>
-          名字(可选,留空自动生成)
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="项目名"
-            style={inputStyle}
-          />
-        </label>
+        {!electron && (
+          <div
+            style={{
+              padding: 12,
+              background: 'rgba(217, 119, 6, 0.1)',
+              border: '1px solid rgba(217, 119, 6, 0.3)',
+              borderRadius: 4,
+              fontSize: 12,
+              color: 'var(--text-secondary)',
+              marginBottom: 12,
+              lineHeight: 1.6,
+            }}
+          >
+            ⚠ 浏览器模式不能选本地文件夹。请用 <code>pnpm electron:dev</code>{' '}
+            起桌面版,或直接打包 App 来用。
+          </div>
+        )}
 
         {electron && (
-          <div style={{ marginTop: 16 }}>
+          <>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
-              本地文件夹绑定(可选)
+              本地文件夹(必选)
             </div>
             {pickedPath ? (
               <div style={pickedBoxStyle}>
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>
+                <span
+                  style={{
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    fontFamily: 'var(--font-mono)',
+                  }}
+                >
                   {pickedPath}
                 </span>
-                <button onClick={() => setPickedPath(null)} style={miniBtn}>清除</button>
+                <button onClick={() => setPickedPath(null)} style={miniBtn}>
+                  重选
+                </button>
               </div>
             ) : (
               <button onClick={pickFolder} disabled={validating} style={pickBtn}>
@@ -98,18 +117,46 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
                 {error}
               </div>
             )}
-            <div style={{ marginTop: 8, color: 'var(--text-tertiary)', fontSize: 11, lineHeight: 1.5 }}>
-              {pickedPath
-                ? 'AI 直接读写这个文件夹;关 App 文件保留;支持 VSCode 外部编辑同步'
-                : '不选则创建虚拟项目(文件存浏览器 IndexedDB,关 App 仍在,但跟本地文件系统隔离)'}
+            <div
+              style={{
+                marginTop: 10,
+                color: 'var(--text-tertiary)',
+                fontSize: 11,
+                lineHeight: 1.6,
+                padding: '8px 10px',
+                background: 'var(--bg-elevated)',
+                borderRadius: 4,
+              }}
+            >
+              · AI 生成的所有设计文件会放在{' '}
+              <code style={{ color: 'var(--accent)' }}>{pickedPath ? `${pickedPath}/.design/` : '<选的文件夹>/.design/'}</code>
+              <br />· 文件夹原有代码 ai-design 不会动,也读不到(隔离)
+              <br />· 推荐挂到一个 git 仓库根 —— 顶栏会显示 branch + 改动数
+              <br />· 可以把 <code>.design</code> 加进 <code>.gitignore</code>(或不加,作为 design assets 跟代码一起 version)
             </div>
-          </div>
+
+            <label style={{ ...labelStyle, marginTop: 16 }}>
+              项目名(可选,默认用文件夹名)
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={pickedPath ? pickedPath.split(/[/\\]/).pop() : '项目名'}
+                style={inputStyle}
+              />
+            </label>
+          </>
         )}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 20, justifyContent: 'flex-end' }}>
-          <button style={btnGhost} onClick={() => { reset(); onClose(); }}>取消</button>
-          <button style={btnPrimary} onClick={() => submit(pickedPath)}>
-            {pickedPath ? '创建并绑定' : '创建虚拟项目'}
+          <button style={btnGhost} onClick={() => { reset(); onClose(); }}>
+            取消
+          </button>
+          <button
+            style={pickedPath ? btnPrimary : btnDisabled}
+            disabled={!pickedPath}
+            onClick={submit}
+          >
+            创建并绑定
           </button>
         </div>
       </div>
@@ -131,7 +178,7 @@ const panel: React.CSSProperties = {
   border: '1px solid var(--border-default)',
   borderRadius: 8,
   padding: 20,
-  width: 480,
+  width: 540,
   maxWidth: '90vw',
   fontSize: 13,
 };
@@ -154,7 +201,7 @@ const inputStyle: React.CSSProperties = {
 };
 const pickBtn: React.CSSProperties = {
   width: '100%',
-  padding: '8px 12px',
+  padding: '10px 12px',
   background: 'var(--bg-input)',
   border: '1px dashed var(--border-default)',
   borderRadius: 4,
@@ -166,7 +213,7 @@ const pickedBoxStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
-  padding: '6px 10px',
+  padding: '8px 10px',
   background: 'var(--bg-input)',
   border: '1px solid var(--border-default)',
   borderRadius: 4,
@@ -174,10 +221,12 @@ const pickedBoxStyle: React.CSSProperties = {
   color: 'var(--text-primary)',
 };
 const miniBtn: React.CSSProperties = {
-  padding: '2px 6px',
+  padding: '3px 8px',
   fontSize: 11,
   color: 'var(--text-tertiary)',
   background: 'transparent',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 3,
 };
 const btnGhost: React.CSSProperties = {
   padding: '6px 12px',
@@ -194,4 +243,10 @@ const btnPrimary: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 600,
   cursor: 'pointer',
+};
+const btnDisabled: React.CSSProperties = {
+  ...btnPrimary,
+  background: 'var(--bg-elevated)',
+  color: 'var(--text-disabled)',
+  cursor: 'not-allowed',
 };

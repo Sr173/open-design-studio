@@ -69,6 +69,16 @@ export type PreviewMessage =
       type: 'element_info_reply';
       requestId: string;
       info: ElementInfo | null;
+    }
+  | {
+      __aidSource: 'preview';
+      projectId: number;
+      type: 'wheel_zoom';
+      deltaY: number;
+      /** iframe-local 坐标 — host 转成 wrap-local 再做 anchored zoom */
+      ifx: number;
+      ify: number;
+      ts: number;
     };
 
 export type PreviewListener = (msg: PreviewMessage) => void;

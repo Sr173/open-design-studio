@@ -1,0 +1,307 @@
+/* ai-design · shared tokens & atoms
+ * Stance: 工作台克制工业感,主角是画布(iframe 里的 AI 设计稿)。
+ * 沿用项目 src/styles/tokens.css 的暖橙 accent + 深色基底,
+ * 但把字号、间距、border、状态色重新校准成"现代工作台"标准。
+ *
+ * 三个变体共享:
+ *   - 调色板(深色基底 + 单暖橙 accent + mono 字体)
+ *   - 字号/间距阶梯
+ *   - 原子组件:.pill / .kbd / .dot / .stripe-placeholder
+ *   - 画布 mock 设计稿(每个变体的 iframe 里都显示同一个 mock)
+ * 三个变体差异点:chat & filetree 的承载形态 = 副驾结构。
+ */
+
+:root {
+  /* ───────── 基础色 ───────── */
+  --bg-base:      #0b0c0f;
+  --bg-panel:     #131418;
+  --bg-elevated:  #1a1c22;
+  --bg-overlay:   rgba(11, 12, 15, 0.72);
+  --bg-canvas:    #0e0f12;   /* 画布外框,稍微亮于 bg-base */
+
+  --line-hair:    rgba(255,255,255,0.04);
+  --line-soft:    rgba(255,255,255,0.07);
+  --line-mid:     rgba(255,255,255,0.11);
+  --line-strong:  rgba(255,255,255,0.20);
+
+  --fg-1:         #ecedf0;
+  --fg-2:         #a8aab2;
+  --fg-3:         #6b6e78;
+  --fg-4:         #45474f;
+
+  --accent:       #ffa451;     /* 工具调用、运行中、品牌 */
+  --accent-soft:  rgba(255,164,81,0.14);
+  --accent-line:  rgba(255,164,81,0.32);
+  --success:      #6ec98f;
+  --warning:      #ffcc66;
+  --error:        #ff7766;
+  --info:         #7aa2ff;
+
+  /* ───────── 字体 ───────── */
+  --font-ui:    "Inter", -apple-system, "PingFang SC", "Segoe UI", Roboto, sans-serif;
+  --font-mono:  "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  --fs-2xs: 10px;
+  --fs-xs:  11px;
+  --fs-sm:  12px;
+  --fs-md:  13px;
+  --fs-lg:  15px;
+  --fs-xl:  18px;
+  --fs-2xl: 24px;
+
+  --sp-1: 4px;   --sp-2: 6px;   --sp-3: 8px;   --sp-4: 12px;
+  --sp-5: 16px;  --sp-6: 20px;  --sp-7: 28px;  --sp-8: 40px;
+
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+
+  --shadow-pop:  0 8px 28px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.04) inset;
+  --shadow-dock: 0 20px 60px rgba(0,0,0,0.55), 0 0 0 1px var(--line-mid);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--bg-base);
+  color: var(--fg-1);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  letter-spacing: -0.005em;
+}
+button {
+  font: inherit; color: inherit;
+  border: none; background: none; cursor: pointer;
+  padding: 0;
+}
+input, textarea {
+  font: inherit; color: inherit;
+  background: transparent; border: none; outline: none;
+  resize: none;
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line-soft); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--line-mid); }
+
+/* ───────── 原子 ───────── */
+.mono { font-family: var(--font-mono); }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  background: var(--bg-elevated);
+  border: 1px solid var(--line-soft);
+}
+.pill.accent {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+.pill.success { color: var(--success); border-color: rgba(110,201,143,0.28); background: rgba(110,201,143,0.10); }
+.pill.warn    { color: var(--warning); border-color: rgba(255,204,102,0.28); background: rgba(255,204,102,0.10); }
+
+.kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line-mid);
+  border-bottom-width: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--fg-2);
+}
+
+.dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--fg-3);
+  flex-shrink: 0;
+}
+.dot.live { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: pulse 1.6s ease-in-out infinite; }
+.dot.ok   { background: var(--success); }
+.dot.warn { background: var(--warning); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+
+.stripe {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255,255,255,0.025) 0 6px,
+    transparent 6px 12px
+  );
+}
+
+/* ───────── 画布 mock 设计稿(三个变体共享同一份)─────────
+ * 这是 iframe 里"AI 正在打磨的设计稿"。
+ * 画一个 mock 产品落地页:hero + 三列特性。
+ * 给画布塞真实内容,这样"画布占比"才是看得见的痛点。
+ */
+.canvas-mock {
+  width: 100%; height: 100%;
+  background: linear-gradient(180deg, #fff8f1 0%, #fff 30%);
+  color: #1a1a1f;
+  font-family: -apple-system, "Inter", system-ui, sans-serif;
+  overflow: auto;
+  position: relative;
+}
+.canvas-mock .mk-nav {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 48px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+.canvas-mock .mk-logo {
+  font-weight: 700; font-size: 16px; letter-spacing: -0.02em;
+  display: flex; align-items: center; gap: 8px;
+}
+.canvas-mock .mk-logo::before {
+  content: ""; width: 18px; height: 18px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #ff8a3d, #ffb56a);
+}
+.canvas-mock .mk-nav-links {
+  display: flex; gap: 28px;
+  font-size: 13px; color: #5a5a66;
+}
+.canvas-mock .mk-cta {
+  background: #ff8a3d; color: white;
+  padding: 8px 16px; border-radius: 8px;
+  font-size: 13px; font-weight: 600;
+}
+.canvas-mock .mk-hero {
+  padding: 80px 48px 64px;
+  display: grid; grid-template-columns: 1.1fr 1fr; gap: 64px;
+  align-items: center;
+}
+.canvas-mock .mk-h1 {
+  font-size: clamp(36px, 4.5vw, 56px);
+  font-weight: 700; line-height: 1.05;
+  letter-spacing: -0.035em;
+  margin-bottom: 20px;
+}
+.canvas-mock .mk-h1 em {
+  font-style: normal; color: #ff7820;
+  background: linear-gradient(180deg, transparent 62%, rgba(255,138,61,0.18) 62%);
+}
+.canvas-mock .mk-sub {
+  font-size: 16px; color: #5a5a66; line-height: 1.55;
+  margin-bottom: 28px; max-width: 460px;
+}
+.canvas-mock .mk-actions {
+  display: flex; gap: 12px; align-items: center;
+}
+.canvas-mock .mk-btn-primary {
+  background: #1a1a1f; color: white;
+  padding: 12px 22px; border-radius: 10px;
+  font-size: 14px; font-weight: 600;
+}
+.canvas-mock .mk-btn-ghost {
+  padding: 12px 18px; font-size: 14px; font-weight: 500;
+  color: #1a1a1f;
+}
+.canvas-mock .mk-hero-art {
+  aspect-ratio: 4/3;
+  border-radius: 16px;
+  background:
+    radial-gradient(ellipse at 30% 30%, rgba(255,138,61,0.35), transparent 50%),
+    radial-gradient(ellipse at 70% 70%, rgba(122,162,255,0.25), transparent 50%),
+    linear-gradient(135deg, #fff1e3, #ffe3cc);
+  border: 1px solid rgba(255,138,61,0.18);
+  position: relative;
+  overflow: hidden;
+}
+.canvas-mock .mk-hero-art::after {
+  content: "";
+  position: absolute; inset: 24px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.6);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.8);
+  background-image:
+    linear-gradient(0deg, transparent 95%, rgba(0,0,0,0.04) 95%),
+    linear-gradient(90deg, transparent 95%, rgba(0,0,0,0.04) 95%);
+  background-size: 24px 24px;
+}
+.canvas-mock .mk-features {
+  padding: 32px 48px 80px;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+}
+.canvas-mock .mk-feat {
+  padding: 24px;
+  border-radius: 12px;
+  background: white;
+  border: 1px solid rgba(0,0,0,0.06);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+}
+.canvas-mock .mk-feat-ico {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: #fff0e0;
+  display: grid; place-items: center;
+  font-size: 16px;
+  margin-bottom: 14px;
+}
+.canvas-mock .mk-feat h3 {
+  font-size: 15px; font-weight: 650;
+  margin-bottom: 6px;
+  letter-spacing: -0.015em;
+}
+.canvas-mock .mk-feat p {
+  font-size: 13px; color: #5a5a66; line-height: 1.5;
+}
+
+/* 极窄画布响应 — 画布<600 时 hero 收成单列 */
+@container canvas-frame (max-width: 700px) {
+  .canvas-mock .mk-hero { grid-template-columns: 1fr; padding: 48px 28px; }
+  .canvas-mock .mk-features { grid-template-columns: 1fr; padding: 24px 28px 48px; }
+  .canvas-mock .mk-nav { padding: 14px 24px; }
+}
+
+/* ───────── 画布外框(三变体复用)───────── */
+.canvas-frame {
+  container-type: inline-size;
+  container-name: canvas-frame;
+  background: var(--bg-canvas);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+  position: relative;
+}
+.canvas-frame-bar {
+  height: 28px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--fg-3);
+}
+.canvas-frame-bar .traffic {
+  display: flex; gap: 6px;
+}
+.canvas-frame-bar .traffic span {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--line-mid);
+}

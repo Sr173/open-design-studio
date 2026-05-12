@@ -11,7 +11,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import type { ChatController } from '../store/chat';
+import type { ChatController, TodoItem } from '../store/chat';
 import type { Block, ChatMessage } from '../store/db';
 import { Markdown } from '../components/Markdown';
 import { ToolCallBlock } from '../components/ToolCallBlock';
@@ -145,13 +145,16 @@ export function ChatPane({ controller, onOpenSettings }: ChatPaneProps) {
       style={{
         width: 'var(--chat-w)',
         flex: '0 0 var(--chat-w)',
-        background: 'var(--bg-panel)',
-        borderLeft: '1px solid var(--border-subtle)',
+        background: 'var(--chat-bg, var(--bg-panel))',
+        borderLeft: 'var(--chat-border-left, 1px solid var(--border-subtle))',
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
+        minHeight: 0,
+        overflow: 'hidden',
       }}
     >
+      {state.todos.length > 0 && <TodoPanel todos={state.todos} />}
       <div
         ref={scrollRef}
         style={{
@@ -969,3 +972,141 @@ const btnSecondarySmall: React.CSSProperties = {
   color: 'var(--text-secondary)',
   fontSize: 'var(--fs-xs)',
 };
+
+// ============================================================
+// TodoPanel — v6.1:AI 用 todo_write 维护的多步任务清单
+// 折叠态:一个 strip 显示 "▸ <activeForm> · 2/5 done"
+// 展开态:完整列表
+// ============================================================
+
+function TodoPanel({ todos }: { todos: TodoItem[] }) {
+  const [open, setOpen] = useState(true);
+  const completed = todos.filter((t) => t.status === 'completed').length;
+  const inProg = todos.find((t) => t.status === 'in_progress');
+
+  return (
+    <div
+      style={{
+        flex: '0 0 auto',
+        background: 'rgba(255, 164, 81, 0.04)',
+        borderBottom: '1px solid var(--border-subtle)',
+        fontSize: 'var(--fs-xs)',
+      }}
+    >
+      {/* head — 永远显示,点击折叠/展开 */}
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '7px 12px',
+          background: 'transparent',
+          color: 'var(--text-secondary)',
+          textAlign: 'left',
+        }}
+      >
+        <span
+          style={{
+            color: 'var(--text-tertiary)',
+            fontSize: 9,
+            width: 10,
+            display: 'inline-block',
+            transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
+            transition: 'transform 100ms',
+          }}
+        >
+          ▸
+        </span>
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 9,
+            color: 'var(--text-tertiary)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+          }}
+        >
+          todo
+        </span>
+        <span
+          style={{
+            color: 'var(--text-primary)',
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {inProg
+            ? inProg.activeForm
+            : completed === todos.length
+              ? '所有任务已完成 ✓'
+              : `${todos.length - completed} 项待办`}
+        </span>
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 9,
+            color: 'var(--text-tertiary)',
+          }}
+        >
+          {completed}/{todos.length}
+        </span>
+      </button>
+
+      {/* body — 展开时显示完整列表 */}
+      {open && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            padding: '0 12px 8px',
+          }}
+        >
+          {todos.map((t) => {
+            const mark =
+              t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '▸' : '○';
+            const color =
+              t.status === 'completed'
+                ? 'var(--success, #6ec98f)'
+                : t.status === 'in_progress'
+                  ? 'var(--accent)'
+                  : 'var(--text-tertiary)';
+            const display = t.status === 'in_progress' ? t.activeForm : t.content;
+            return (
+              <div
+                key={t.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: 8,
+                  padding: '2px 0 2px 18px',
+                  fontSize: 'var(--fs-xs)',
+                  color: t.status === 'completed' ? 'var(--text-tertiary)' : 'var(--text-secondary)',
+                  textDecoration: t.status === 'completed' ? 'line-through' : 'none',
+                }}
+              >
+                <span
+                  style={{
+                    color,
+                    fontFamily: 'var(--font-mono)',
+                    width: 12,
+                    flexShrink: 0,
+                  }}
+                >
+                  {mark}
+                </span>
+                <span style={{ color: t.status === 'in_progress' ? 'var(--accent)' : 'inherit', flex: 1 }}>
+                  {display}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -71,6 +71,52 @@ const native = {
     validateRoot(rootPath: string): Promise<boolean> {
       return ipcRenderer.invoke('fs:validate-root', rootPath);
     },
+    /** 读用户原项目源码(不是 .design/) — 只读 */
+    readSource(rootPath: string, relPath: string): Promise<NativeFile | null> {
+      return ipcRenderer.invoke('fs:read-source', rootPath, relPath);
+    },
+    /** 列用户原项目某一层(非递归,像 `ls`);可选 subPath 切换到子目录;
+     *  自动:① git 跟踪过滤 ② 黑名单跳过 ③ 单层 200 条 cap */
+    listSource(
+      rootPath: string,
+      subPath: string = ''
+    ): Promise<{
+      entries: Array<{
+        path: string;
+        kind: 'file' | 'dir';
+        type: FileType;
+        size: number;
+      }>;
+      gitMode: boolean;
+      truncated: boolean;
+    }> {
+      return ipcRenderer.invoke('fs:list-source', rootPath, subPath);
+    },
+    /** grep + glob 跨命名空间搜索;返 hits[path:line] + 上下 N 行 context */
+    search(
+      rootPath: string,
+      opts: {
+        pattern: string;
+        glob?: string;
+        scope: 'design' | 'source' | 'both';
+        caseSensitive?: boolean;
+        maxResults?: number;
+        contextLines?: number;
+      }
+    ): Promise<{
+      hits: Array<{
+        path: string;
+        line: number;
+        match: string;
+        contextBefore: string[];
+        contextAfter: string[];
+      }>;
+      filesScanned: number;
+      truncated: boolean;
+      patternMode: 'regex' | 'plain';
+    }> {
+      return ipcRenderer.invoke('fs:search', rootPath, opts);
+    },
   },
 
   // === dialog ===

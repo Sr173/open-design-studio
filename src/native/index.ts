@@ -49,6 +49,37 @@ export interface NativeAPI {
     list(rootPath: string): Promise<Array<{ path: string; type: FileType; size: number; mtime: number }>>;
     delete(rootPath: string, relPaths: string[]): Promise<void>;
     validateRoot(rootPath: string): Promise<boolean>;
+    readSource(rootPath: string, relPath: string): Promise<NativeFile | null>;
+    listSource(
+      rootPath: string,
+      subPath?: string
+    ): Promise<{
+      entries: Array<{ path: string; kind: 'file' | 'dir'; type: FileType; size: number }>;
+      gitMode: boolean;
+      truncated: boolean;
+    }>;
+    search(
+      rootPath: string,
+      opts: {
+        pattern: string;
+        glob?: string;
+        scope: 'design' | 'source' | 'both';
+        caseSensitive?: boolean;
+        maxResults?: number;
+        contextLines?: number;
+      }
+    ): Promise<{
+      hits: Array<{
+        path: string;
+        line: number;
+        match: string;
+        contextBefore: string[];
+        contextAfter: string[];
+      }>;
+      filesScanned: number;
+      truncated: boolean;
+      patternMode: 'regex' | 'plain';
+    }>;
   };
   dialog: {
     pickDirectory(): Promise<string | null>;

@@ -30,7 +30,9 @@ import {
 } from '../store/chat';
 import { NewProjectDialog } from './NewProjectDialog';
 import { NewTaskDialog } from './NewTaskDialog';
-import { createProject } from '../store/projects';
+import { createProject, setProjectRoot } from '../store/projects';
+import { native, isElectron } from '../native';
+import { invalidateRootPathCache } from '../store/files';
 
 interface ProjectsSidebarProps {
   activeProjectId: number;
@@ -290,7 +292,24 @@ function ProjectGroup({
   }, [project.id]);
 
   const isActive = initiallyExpanded;
-  const folderIcon = project.rootPath ? '📂' : '📁';
+  const isUnbound = !project.rootPath;
+  const folderIcon = project.rootPath ? '📂' : '⚠';
+
+  async function bindFolder() {
+    if (!isElectron() || project.id == null) return;
+    const n = native();
+    if (!n) return;
+    const p = await n.dialog.pickDirectory();
+    if (!p) return;
+    try {
+      await n.fs.validateRoot(p);
+      await setProjectRoot(project.id, p);
+      invalidateRootPathCache(project.id);
+      onProjectsChanged();
+    } catch (e: any) {
+      alert(e?.message ?? String(e));
+    }
+  }
 
   return (
     <div style={{ marginBottom: 2 }}>
@@ -369,16 +388,45 @@ function ProjectGroup({
             style={{
               flex: 1,
               fontSize: 12,
-              color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+              color: isUnbound
+                ? 'var(--text-tertiary)'
+                : isActive
+                ? 'var(--text-primary)'
+                : 'var(--text-secondary)',
               fontWeight: isActive ? 500 : 400,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
+              fontStyle: isUnbound ? 'italic' : 'normal',
             }}
-            title={project.rootPath ?? '虚拟项目(IDB)'}
+            title={
+              project.rootPath ??
+              '⚠ 此项目还没绑定本地文件夹 — 旧版本遗留,点 🔗 绑定一个新文件夹'
+            }
           >
             {project.name}
+            {isUnbound && (
+              <span style={{ color: 'var(--warning, #d97706)', marginLeft: 4, fontSize: 10 }}>
+                · 未绑定
+              </span>
+            )}
           </span>
+        )}
+        {isUnbound && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              bindFolder();
+            }}
+            style={{
+              color: 'var(--warning, #d97706)',
+              fontSize: 11,
+              padding: '0 4px',
+            }}
+            title="给此项目绑定本地文件夹"
+          >
+            🔗
+          </button>
         )}
         <button
           onClick={(e) => {

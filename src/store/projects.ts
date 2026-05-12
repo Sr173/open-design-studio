@@ -79,18 +79,17 @@ export function setCurrentProjectId(id: number): void {
   sessionStorage.setItem(CURRENT_PROJECT_KEY, String(id));
 }
 
-/** 启动时调用:确保有一个当前项目可用,没有就建一个空白的 */
-export async function ensureCurrentProject(): Promise<number> {
+/** 启动时调用:返回当前项目 id,若无任何项目返回 null(Shell 显示 onboarding 让用户新建) */
+export async function ensureCurrentProject(): Promise<number | null> {
   const cur = getCurrentProjectId();
   if (cur != null) {
     const exists = await db.projects.get(cur);
     if (exists) return cur;
   }
-  // 取最近的或新建
   const recent = await db.projects.orderBy('updatedAt').reverse().first();
   if (recent?.id) {
     setCurrentProjectId(recent.id);
     return recent.id;
   }
-  return createProject('未命名项目');
+  return null;
 }
