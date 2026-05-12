@@ -33,22 +33,54 @@ export class AnthropicProvider implements LLMProvider {
 
     const tools = req.tools.map(toAnthropicTool);
 
-    const stream = this.client.messages.stream(
-      {
-        model: this.model,
-        max_tokens: req.maxTokens ?? 8192,
-        system,
-        messages,
-        tools: tools.length ? tools : undefined,
-      },
-      { signal: req.signal }
-    );
+    const reqMeta = {
+      model: this.model,
+      systemChars: system.length,
+      msgCount: messages.length,
+      toolCount: tools.length,
+      maxTokens: req.maxTokens ?? 8192,
+    };
+    console.log('[anthropic] →', reqMeta);
+
+    let stream;
+    try {
+      stream = this.client.messages.stream(
+        {
+          model: this.model,
+          max_tokens: req.maxTokens ?? 8192,
+          system,
+          messages,
+          tools: tools.length ? tools : undefined,
+        },
+        { signal: req.signal }
+      );
+    } catch (e: any) {
+      console.error('[anthropic] stream-create 失败:', {
+        message: e?.message,
+        status: e?.status,
+        error: e?.error,
+        headers: e?.headers,
+      });
+      throw e;
+    }
 
     stream.on('streamEvent', (event: any) => {
       handleAnthropicEvent(event, req.onDelta);
     });
 
-    const final = await stream.finalMessage();
+    let final;
+    try {
+      final = await stream.finalMessage();
+    } catch (e: any) {
+      console.error('[anthropic] finalMessage 失败:', {
+        message: e?.message,
+        status: e?.status,
+        error: e?.error,
+        headers: e?.headers,
+        rawResponse: e?.response?.headers,
+      });
+      throw e;
+    }
 
     const blocks = anthropicContentToBlocks(final.content as any[]);
     const stopReason = mapStopReason(final.stop_reason);

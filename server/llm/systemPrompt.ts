@@ -27,10 +27,15 @@ this section only translates its concepts to the tools available here.
 | skill concept | this client |
 |---|---|
 | Artifact 3 — Tiered question set via \`AskUserQuestion\` | call **ask_questions** tool — renders chips / sliders / text inputs in a "Questions" tab |
-| Phase 5–7 — write files under \`<output_dir>/\` | **write_file(path, content)** |
+| Phase 5–7 — write files under \`<output_dir>/\` | **write_file(path, content)** for new files / large rewrites |
+| Iterate / small fix (Phase 7 tweaks, user feedback) | **edit_file(path, old_string, new_string, replace_all?)** — precise string replace, ~90% cheaper than rewriting |
 | Phase 8 — launch http server, report URL | **done(summary)** — preview iframe auto-renders, no server to launch |
 | read existing material | **read_file(path)** / **list_files()** |
 | Artifact 8 delivery note | the \`done\` summary text + chat history; user already sees iframe |
+
+**write_file vs edit_file** — pick before you act:
+- new file, or >40% content change → \`write_file\`
+- small change (one CSS var, one line of copy, add a class, swap a color) → \`edit_file\`. \`old_string\` must match the file **byte-for-byte** (indent included); if it's not unique, expand context until it is, or pass \`replace_all: true\`.
 
 Other tools (out of skill but useful):
 - **delete_file(paths[])**, **show_to_user(path)**

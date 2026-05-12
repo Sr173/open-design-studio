@@ -602,8 +602,16 @@ export class ChatController {
       if (isAbortErr(err)) {
         interruptedByAbort = true;
         if (pendingAssistantId != null) {
+          // 关键:中断时若 assistant 写了 tool_use 但工具循环没机会 push 对应 tool_result,
+          // 下次发回 LLM 会因孤儿 tool_use 报错。这里**剥掉所有 tool_use**,只留 text
+          // (server 端 dropOrphanServerToolUses 还有一道兜底,但本地干净最稳)
+          const cleaned = this.streamingBlocks.filter(
+            (b) => b.type !== 'tool_use'
+          );
           await this.updateMessage(pendingAssistantId, {
-            blocks: this.streamingBlocks,
+            blocks: cleaned.length
+              ? cleaned
+              : [{ type: 'text', text: '[中断 — AI 当时在调工具,内容已丢弃]' }],
             interrupted: true,
           });
         }

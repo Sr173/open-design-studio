@@ -153,8 +153,11 @@ export const V1_TOOLS: ChatToolDef[] = [
   {
     name: 'write_file',
     description:
-      '创建或覆盖一个项目文件。HTML/CSS/JS 内容会被持久化,SW 在预览 iframe 里直接 serve。' +
-      '若该文件已存在则覆盖。HTML 文件入库前会自动注入 data-aid 元素 ID,你不需要手写。',
+      '创建或覆盖一个项目文件(整文件写)。HTML/CSS/JS 内容会被持久化,SW 在预览 iframe 里直接 serve。' +
+      '若该文件已存在则覆盖。HTML 文件入库前会自动注入 data-aid 元素 ID,你不需要手写。' +
+      '\n\n**选择 write_file vs edit_file**:' +
+      '\n- 新文件 / 大改(>40% 内容) → write_file' +
+      '\n- 小改(改 1 行 CSS 变量、改一段文案、加一个 class) → 用 edit_file 省 token',
     input_schema: {
       type: 'object',
       properties: {
@@ -165,6 +168,40 @@ export const V1_TOOLS: ChatToolDef[] = [
         content: { type: 'string', description: '文件全文' },
       },
       required: ['path', 'content'],
+    },
+  },
+  {
+    name: 'edit_file',
+    description:
+      '在已存在的文件里做精确字符串替换 — 改一两处的首选,比 write_file 整文件重写省 90% token。' +
+      '\n\n规则:' +
+      '\n- old_string 必须**逐字符精确**出现在文件里(含缩进、空格、换行)' +
+      '\n- 默认 old_string 在文件中**必须唯一**;不唯一时:① 扩展 old_string 包更多上下文使其唯一,或 ② 显式传 replace_all=true 一次性替换全部' +
+      '\n- new_string 不能等于 old_string(那是 no-op,会被拒)' +
+      '\n- HTML 文件改完仍会跑 data-aid 自动注入 — 不要在 old_string / new_string 里手写 data-aid' +
+      '\n- 文件不存在 → 用 write_file 而不是 edit_file' +
+      '\n\n典型用法:' +
+      '\n- 改一行 CSS 变量 → old="--brand: #ff8800;" new="--brand: #1e3a8a;"' +
+      '\n- 改一段文案 → old="立即注册" new="开始试用"' +
+      '\n- 改一个 class → old=\'class="btn-primary"\' new=\'class="btn-primary btn-lg"\'',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '相对路径' },
+        old_string: {
+          type: 'string',
+          description: '要被替换的精确文本(逐字符匹配)',
+        },
+        new_string: {
+          type: 'string',
+          description: '替换后的文本',
+        },
+        replace_all: {
+          type: 'boolean',
+          description: '默认 false(要求唯一匹配);true 时替换所有出现',
+        },
+      },
+      required: ['path', 'old_string', 'new_string'],
     },
   },
   {
@@ -246,6 +283,8 @@ export async function executeTool(
   switch (name) {
     case 'write_file':
       return execWriteFile(input, ctx);
+    case 'edit_file':
+      return execEditFile(input, ctx);
     case 'read_file':
       return execReadFile(input, ctx);
     case 'list_files':
@@ -304,6 +343,110 @@ async function execWriteFile(
         : ''
     })`,
   };
+}
+
+async function execEditFile(
+  input: any,
+  ctx: ToolExecCtx
+): Promise<ToolResult> {
+  const path = String(input?.path ?? '');
+  const oldStr = String(input?.old_string ?? '');
+  const newStr = String(input?.new_string ?? '');
+  const replaceAll = !!input?.replace_all;
+
+  if (!isValidPath(path)) {
+    return { content: `路径不合法: ${path}`, is_error: true };
+  }
+  if (!oldStr) {
+    return { content: 'old_string 不能为空', is_error: true };
+  }
+  if (oldStr === newStr) {
+    return {
+      content: 'old_string 等于 new_string,no-op 被拒(没有实际修改)',
+      is_error: true,
+    };
+  }
+
+  const existing = await readFile(ctx.projectId, path);
+  if (!existing) {
+    return {
+      content: `文件不存在: ${path}。新建文件请用 write_file。`,
+      is_error: true,
+    };
+  }
+  if (existing.type === 'binary') {
+    return {
+      content: `不能 edit 二进制文件: ${path}`,
+      is_error: true,
+    };
+  }
+
+  // 匹配检查
+  const occurrences = countOccurrences(existing.content, oldStr);
+  if (occurrences === 0) {
+    return {
+      content:
+        `old_string 在 ${path} 里没找到。常见原因:` +
+        `① 缩进/空格不对(逐字符精确匹配,含 tab/space 类型);` +
+        `② 你记的内容跟实际文件有出入,先 read_file 确认一下;` +
+        `③ 行尾差异(\\n vs \\r\\n)`,
+      is_error: true,
+    };
+  }
+  if (occurrences > 1 && !replaceAll) {
+    return {
+      content:
+        `old_string 在 ${path} 里出现了 ${occurrences} 次,匹配不唯一。` +
+        `要么扩展 old_string 包更多上下文让它唯一,要么传 replace_all=true 一次替换全部。`,
+      is_error: true,
+    };
+  }
+
+  // 执行替换
+  let nextContent: string;
+  if (replaceAll) {
+    nextContent = splitAndJoin(existing.content, oldStr, newStr);
+  } else {
+    const idx = existing.content.indexOf(oldStr);
+    nextContent =
+      existing.content.slice(0, idx) +
+      newStr +
+      existing.content.slice(idx + oldStr.length);
+  }
+
+  // === Detector lint(跟 write_file 一致;edit 也可能引入 commentary 等问题)===
+  const lintCommentary = lintVariantCommentary(path, nextContent);
+  if (!lintCommentary.ok)
+    return { content: lintCommentary.reason, is_error: true };
+
+  ctx.onWriteStart?.(path);
+  const processed = postProcessOnWrite(path, nextContent);
+  await writeFile(ctx.projectId, path, processed, 'text', 'ai');
+
+  const replacedCount = replaceAll ? occurrences : 1;
+  const sizeDiff = processed.length - existing.content.length;
+  return {
+    content:
+      `edited ${path} (${replacedCount} replacement${replacedCount > 1 ? 's' : ''}, ` +
+      `${sizeDiff >= 0 ? '+' : ''}${sizeDiff} chars)`,
+  };
+}
+
+/** 计算 needle 在 hay 中的出现次数(不重叠) */
+function countOccurrences(hay: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let pos = 0;
+  while ((pos = hay.indexOf(needle, pos)) !== -1) {
+    count++;
+    pos += needle.length;
+  }
+  return count;
+}
+
+/** 全量替换 — split/join 避免 regex 特殊字符问题 */
+function splitAndJoin(hay: string, needle: string, replacement: string): string {
+  return hay.split(needle).join(replacement);
 }
 
 async function execReadFile(input: any, ctx: ToolExecCtx): Promise<ToolResult> {

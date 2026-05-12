@@ -29,7 +29,8 @@ class ElementBridge {
   };
   private listeners = new Set<(s: BridgeState) => void>();
   private unsubMessage: (() => void) | null = null;
-  private iframeRef: HTMLIFrameElement | null = null;
+  /** 所有挂到 bridge 的 iframe — 单变体只挂 1 个,canvas 模式挂 N 个 */
+  private iframes = new Set<HTMLIFrameElement>();
 
   constructor(public readonly projectId: number) {
     this.unsubMessage = onPreviewMessage(projectId, (msg) => {
@@ -48,32 +49,34 @@ class ElementBridge {
         });
         // inlineEdit 模块会另外订阅同一消息把改动回写到源码
       } else if (msg.type === 'ready') {
-        // iframe 重载后重新推一次 mode
+        // iframe 重载后重新推一次 mode(给所有挂着的 iframe)
         if (this.state.mode !== 'preview') {
-          this.sendMode(this.state.mode);
+          this.broadcast(this.state.mode);
         }
       }
     });
   }
 
-  attachIframe(iframe: HTMLIFrameElement | null) {
-    this.iframeRef = iframe;
-    if (iframe && this.state.mode !== 'preview') {
-      this.sendMode(this.state.mode);
+  /** 挂一个 iframe;返回 detach 函数。多变体 canvas 模式下会有 2-4 个同时挂着 */
+  attachIframe(iframe: HTMLIFrameElement | null): () => void {
+    if (!iframe) return () => {};
+    this.iframes.add(iframe);
+    if (this.state.mode !== 'preview') {
+      this.postTo(iframe, { type: 'set_mode', mode: this.state.mode });
     }
+    return () => {
+      this.iframes.delete(iframe);
+    };
   }
 
   setMode(mode: PreviewMode) {
     this.patch({ mode, selection: null, pendingComment: null });
-    this.sendMode(mode);
+    this.broadcast(mode);
   }
 
   clearSelection() {
-    if (this.iframeRef?.contentWindow) {
-      this.iframeRef.contentWindow.postMessage(
-        { __aidTarget: 'preview', projectId: this.projectId, type: 'clear_selection' },
-        '*'
-      );
+    for (const f of this.iframes) {
+      this.postTo(f, { type: 'clear_selection' });
     }
     this.patch({ selection: null, pendingComment: null });
   }
@@ -119,10 +122,17 @@ class ElementBridge {
     for (const fn of this.listeners) fn(this.state);
   }
 
-  private sendMode(mode: PreviewMode) {
-    if (!this.iframeRef?.contentWindow) return;
-    this.iframeRef.contentWindow.postMessage(
-      { __aidTarget: 'preview', projectId: this.projectId, type: 'set_mode', mode },
+  /** 广播给所有挂着的 iframe */
+  private broadcast(mode: PreviewMode) {
+    for (const f of this.iframes) {
+      this.postTo(f, { type: 'set_mode', mode });
+    }
+  }
+
+  private postTo(iframe: HTMLIFrameElement, payload: Record<string, unknown>) {
+    if (!iframe.contentWindow) return;
+    iframe.contentWindow.postMessage(
+      { __aidTarget: 'preview', projectId: this.projectId, ...payload },
       '*'
     );
   }

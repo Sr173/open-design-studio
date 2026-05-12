@@ -21,6 +21,7 @@ import {
   SERVER_TOOL_NAMES,
   execServerTool,
   rehydrateServerToolResults,
+  dropOrphanServerToolUses,
 } from './llm/serverTools.js';
 import type {
   Block,
@@ -100,8 +101,11 @@ app.post('/api/llm/chat', async (c) => {
     const ac = new AbortController();
     c.req.raw.signal?.addEventListener('abort', () => ac.abort());
 
-    // 客户端发来的 messages 含 server-tool 的 placeholder tool_result,先重建真内容给 LLM
-    let history = rehydrateServerToolResults(body.messages);
+    // 先清理:移除任何孤儿 server-managed tool_use(v1.8 早期 bug 留下的坏数据)
+    // 然后 rehydrate:把 placeholder tool_result 还原成真内容
+    let history = rehydrateServerToolResults(
+      dropOrphanServerToolUses(body.messages)
+    );
 
     // tools = client 注册 + server-managed
     const allTools: ChatToolDef[] = [
@@ -119,25 +123,98 @@ app.post('/api/llm/chat', async (c) => {
     // 关键:每轮 buffer deltas,等知道这轮是否要给 client 才决定 emit。
     // 中间轮(纯 server-tool)的 deltas 完全丢弃,client 静默(像 AI 直接跳过 read 步骤)
 
+    // 带重试的 provider.chat 调用 — 应对网关瞬时 close stream / 429 / 5xx / 空响应
+    async function chatWithRetry(
+      callMessages: typeof history,
+      onDelta: (d: Delta) => void
+    ) {
+      const RETRYABLE = [
+        'request ended without sending any chunks',
+        'rate_limit',
+        '429',
+        '502',
+        '503',
+        '504',
+        'ECONNRESET',
+        'ETIMEDOUT',
+      ];
+      let lastErr: any;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const result = await provider!.chat(
+            {
+              messages: callMessages,
+              tools: allTools,
+              signal: ac.signal,
+              onDelta,
+              maxTokens,
+            },
+            system
+          );
+          // **空响应也重试** — gpt-5.5 codex / uniapi 这种 fake 模型常排队后丢空 stream
+          if (
+            result.blocks.length === 0 &&
+            result.stopReason === 'unknown' &&
+            attempt < 3
+          ) {
+            console.error(
+              `[llm] attempt ${attempt}/3 空响应 (blocks=0 stop=unknown),重试`
+            );
+            const delay = 1500 * Math.pow(2, attempt - 1) + Math.random() * 500;
+            await new Promise((r) => setTimeout(r, delay));
+            continue;
+          }
+          return result;
+        } catch (e: any) {
+          lastErr = e;
+          if (e?.name === 'AbortError') throw e;
+          const msg = String(e?.message ?? e ?? '');
+          const status = e?.status;
+          const retryable =
+            RETRYABLE.some((k) => msg.includes(k)) ||
+            (status >= 500 && status < 600) ||
+            status === 429;
+          console.error(
+            `[llm] attempt ${attempt}/3 failed (retryable=${retryable}): ${msg.slice(0, 200)}`
+          );
+          if (!retryable || attempt === 3) throw e;
+          const delay = 800 * Math.pow(2, attempt - 1) + Math.random() * 500;
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+      throw lastErr;
+    }
+
     try {
       let safety = 0;
       while (true) {
         if (safety++ > 8) {
-          // 防 server-tool 自循环
           throw new Error('Server-tool loop exceeded 8 iterations');
         }
 
         // 收集这一轮 deltas — 决定后 emit 或丢
         const buffered: Delta[] = [];
-        const bufferedFinal = await provider!.chat(
-          {
-            messages: history,
-            tools: allTools,
-            signal: ac.signal,
-            onDelta: (d) => buffered.push(d),
-            maxTokens,
-          },
-          system
+        const t0 = Date.now();
+        const userMsgCount = history.filter((m) => m.role === 'user').length;
+        const lastBlock = history[history.length - 1]?.blocks?.slice(-1)?.[0];
+        const lastKind =
+          lastBlock?.type === 'text'
+            ? `text(${(lastBlock.text || '').slice(0, 40).replace(/\n/g, ' ')}...)`
+            : lastBlock?.type === 'tool_result'
+            ? `tool_result(${
+                typeof lastBlock.content === 'string'
+                  ? lastBlock.content.slice(0, 40)
+                  : '[blocks]'
+              })`
+            : lastBlock?.type;
+        console.log(
+          `[chat] iter#${safety} → LLM (msgs=${history.length}, userMsgs=${userMsgCount}, last=${lastKind})`
+        );
+        const bufferedFinal = await chatWithRetry(history, (d) =>
+          buffered.push(d)
+        );
+        console.log(
+          `[chat] iter#${safety} ← LLM ${Date.now() - t0}ms stop=${bufferedFinal.stopReason} blocks=${bufferedFinal.blocks.length}`
         );
 
         const toolUses = bufferedFinal.blocks.filter(
@@ -148,20 +225,67 @@ app.post('/api/llm/chat', async (c) => {
           toolUses.length > 0 &&
           toolUses.every((t) => SERVER_TOOL_NAMES.has(t.name));
 
+        // 3 次都空响应 — 直接 throw,让外层 catch 翻译成友好错误
+        if (
+          bufferedFinal.blocks.length === 0 &&
+          bufferedFinal.stopReason === 'unknown'
+        ) {
+          throw new Error(
+            'empty stream after retries — 上游网关瞬时不稳(gpt-5.5 codex 排队 / uniapi fallback 挂)'
+          );
+        }
+
         if (bufferedFinal.stopReason !== 'tool_use' || !onlyServerTools) {
-          // 这一轮是最终轮:可能是 text-only end_turn,或者含 client-managed tool。
-          // **把 buffered deltas 重放给 client**(尽量保留流式体感;失去的只是首字延迟)
-          for (const d of buffered) {
-            await stream.writeSSE({
-              event: 'delta',
-              data: JSON.stringify(d),
-            });
+          // 最终轮 — emit 给 client。但若是**混合**(LLM 同时调 server + client 工具),
+          // 先在 server 端把 server-managed tool 执行掉 + history 推进 + 在 final.blocks 里
+          // 把 server-managed tool_use 删除(client 不持久化它,Anthropic API 才不会因 missing
+          // tool_result 报错)。client 只看到 client-managed 工具调用。
+          const serverUses = toolUses.filter((t) =>
+            SERVER_TOOL_NAMES.has(t.name)
+          );
+          if (serverUses.length > 0) {
+            console.log(
+              `[chat] mixed-turn: executing ${serverUses.length} server-tool(s) silently`
+            );
+            // server 内部跑掉(LLM 这一轮已经决定调它们,但 LLM 本轮没真拿到结果)
+            for (const t of serverUses) {
+              execServerTool(t.name, t.input); // 副作用:确保 server skill cache 走过一遍
+            }
+            // 从 final blocks 删除 server-managed tool_use
+            const filtered = bufferedFinal.blocks.filter(
+              (b) =>
+                !(b.type === 'tool_use' && SERVER_TOOL_NAMES.has(b.name))
+            );
+            bufferedFinal.blocks = filtered;
+            // 已 buffered 的 deltas 里也含 server-tool 的 tool_call_start / args / end —
+            // 一并丢弃这些 delta,client 看到的 stream 只有 client-managed
+            // (简化:不重放任何 buffered delta,改为基于 filtered.blocks 重新合成必要的 text delta)
+            for (const b of filtered) {
+              if (b.type === 'text' && b.text) {
+                await stream.writeSSE({
+                  event: 'delta',
+                  data: JSON.stringify({ type: 'text', text: b.text }),
+                });
+              } else if (b.type === 'tool_use') {
+                await stream.writeSSE({
+                  event: 'delta',
+                  data: JSON.stringify({
+                    type: 'tool_call_start',
+                    id: b.id,
+                    name: b.name,
+                  }),
+                });
+              }
+            }
+          } else {
+            // 没 server-tool 混入,正常重放 buffered deltas 给 client
+            for (const d of buffered) {
+              await stream.writeSSE({
+                event: 'delta',
+                data: JSON.stringify(d),
+              });
+            }
           }
-          // final blocks 的 tool_use(name in SERVER_TOOL_NAMES)留着,但
-          // 真到这里说明这一轮没有 server-tool(onlyServerTools=false → 要么没 tool_use,
-          // 要么含 client-tool 但也许混着 server-tool)。
-          // 如果混合:把 server-tool 的 tool_use 留给 client 看到,client 不执行(它工具集没有);
-          //   下一轮 client 把 messages 回传时,server rehydrate 兜底
           console.log(
             `[chat] stopReason=${bufferedFinal.stopReason} blocks=${bufferedFinal.blocks.length} (final)`
           );
@@ -198,12 +322,32 @@ app.post('/api/llm/chat', async (c) => {
       if (err?.name === 'AbortError') {
         await stream.writeSSE({ event: 'aborted', data: '{}' });
       } else {
-        const msg = err?.message ?? String(err);
+        const raw = err?.message ?? String(err);
         const status = err?.status ?? null;
-        console.error(`[chat] error: ${msg}`);
+        // 把常见 LLM 网关瞬时错误翻译成人话
+        let friendly = raw;
+        if (raw.includes('request ended without sending any chunks')) {
+          friendly =
+            '上游网关在没返回任何数据前就关闭了 stream(uniapi 瞬时不稳 / 模型 fallback 卡死)。已自动重试 3 次仍失败,稍后或换 model 重试。';
+        } else if (raw.includes('empty stream')) {
+          friendly =
+            '上游连续 3 次返了空响应(等了 90+ 秒后 stream 关掉但 0 字节内容)。' +
+            'cr.killvxk.com 后端 gpt-5.5 codex 此刻在排队卡死。' +
+            '建议:换模型(.env MODEL=gpt-4o 试试),或者切回 uniapi opus-4-7,或稍等几分钟。';
+        } else if (status === 429 || raw.includes('rate_limit')) {
+          friendly =
+            '上游限速:当前分组在排队中。等几秒重发,或换更轻量的模型(sonnet 4.5 比 opus 4-7 顺一些)。';
+        } else if (status === 503 || raw.includes('503')) {
+          friendly =
+            '上游 503 服务不可用(uniapi 后端这一刻没空闲 channel)。已重试 3 次,稍后再试。';
+        } else if (raw.includes('permission') || raw.includes('group')) {
+          friendly =
+            '上游权限:这把 key 不在该模型的可用 group 里。检查 .env MODEL,或换 key。';
+        }
+        console.error(`[chat] error (status=${status}): ${raw.slice(0, 300)}`);
         await stream.writeSSE({
           event: 'error',
-          data: JSON.stringify({ message: msg, status }),
+          data: JSON.stringify({ message: friendly, status, raw }),
         });
       }
     } finally {

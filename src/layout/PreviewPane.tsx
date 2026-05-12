@@ -117,9 +117,10 @@ export function PreviewPane({
   }, [projectId]);
 
   useEffect(() => {
-    bridge.attachIframe(iframeRef.current);
-    return () => bridge.attachIframe(null);
-  }, [bridge, refreshKey]);
+    // 仅 single 模式下 PreviewStage 才渲染 iframeRef.current,canvas 模式由 VariantCanvas 自挂
+    const detach = bridge.attachIframe(iframeRef.current);
+    return () => detach();
+  }, [bridge, refreshKey, variantMode]);
 
   useEffect(() => {
     if (writing?.active && bridge.getState().mode !== 'preview') {
@@ -276,6 +277,7 @@ export function PreviewPane({
           variants={variants}
           refreshKey={refreshKey}
           writingActive={!!writing?.active}
+          bridge={bridge}
           onFocusVariant={(slug) => {
             setActiveVariantSlug(slug);
             setVariantMode('single');
@@ -501,15 +503,29 @@ function VariantCanvas({
   variants,
   refreshKey,
   writingActive,
+  bridge,
   onFocusVariant,
 }: {
   projectId: number;
   variants: VariantInfo[];
   refreshKey: number;
   writingActive: boolean;
+  bridge: ReturnType<typeof getElementBridge>;
   onFocusVariant: (slug: string) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
+  const iframeRefs = useRef<Map<string, HTMLIFrameElement>>(new Map());
+
+  // 把所有 variant iframe 挂到 bridge,模式切换时广播
+  useEffect(() => {
+    const detachers: Array<() => void> = [];
+    for (const f of iframeRefs.current.values()) {
+      detachers.push(bridge.attachIframe(f));
+    }
+    return () => {
+      for (const d of detachers) d();
+    };
+  }, [bridge, refreshKey, variants.map((v) => v.slug).join('|')]);
   const [wrapWidth, setWrapWidth] = useState(0);
   const [wrapHeight, setWrapHeight] = useState(0);
 
@@ -634,6 +650,10 @@ function VariantCanvas({
               >
                 <iframe
                   key={`${v.slug}-${refreshKey}`}
+                  ref={(el) => {
+                    if (el) iframeRefs.current.set(v.slug, el);
+                    else iframeRefs.current.delete(v.slug);
+                  }}
                   src={previewUrl(projectId, v.path, refreshKey)}
                   style={{
                     width: DESIGN_W,
