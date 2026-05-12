@@ -15,3 +15,8 @@ release
 
 # tsc 临时产物
 **/*.js.map
+
+# AI 输出目录 — 每个项目自己的 .design/ 不进 repo
+# 历史 dogfood 案例在 docs/examples/
+.design/
+

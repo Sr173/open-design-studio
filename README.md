@@ -75,6 +75,12 @@ Then:
 
 Recommended model: **Anthropic Claude Opus 4.x** via Anthropic API or compatible gateway. Output budget defaults to 128k tokens (Opus's hard ceiling) so even dense one-shot pages fit.
 
+### Examples
+
+See [`docs/examples/`](docs/examples/) for sample `.design/` outputs you can browse without running anything. Each folder is a complete multi-variant project — drop one into your own project's `.design/` and Open Design Studio will pick it up immediately.
+
+Notably: `docs/examples/dogfooding-workbench-redesign/` shows the 3 variants we generated when redesigning this very tool's UI. Variant A (`sidebar-companion`) is what shipped.
+
 ### Architecture (60 seconds)
 
 ```
@@ -186,6 +192,12 @@ pnpm electron:dev
 4. 看 `<你的文件夹>/.design/variants/` 下出现三个变体
 
 推荐用 **Anthropic Claude Opus 4.x**(Anthropic 官方 API 或兼容网关均可)。输出预算默认 128k tokens(Opus 硬上限),一次性写超密度页面也兜得住。
+
+### 示例
+
+[`docs/examples/`](docs/examples/) 下有 AI 设计输出的真实样例,不用跑代码也能浏览。每个子目录是一个完整的多变体项目 —— 拷到你自己项目的 `.design/` 下,Open Design Studio 立刻识别并展示。
+
+特别注意:`docs/examples/dogfooding-workbench-redesign/` 是**我们用这个工具自己设计自己**生成的 3 个变体方案,最终发布版选了变体 A(`sidebar-companion`)。
 
 ### 30 秒看架构
 
