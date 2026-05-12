@@ -98,6 +98,7 @@ app.use(
 );
 
 // 鉴权 — Electron 模式有 token,浏览器 dev 模式 token 为空就放行。必须在路由前注册。
+// /preview/* 不走 token(iframe 不方便带 Authorization 头);只走 localhost + 文件 path 越权防护
 let activeAuthToken: string | undefined;
 app.use('/api/*', async (c, next) => {
   if (c.req.path === '/api/health') return next();
@@ -107,6 +108,38 @@ app.use('/api/*', async (c, next) => {
     return c.json({ error: 'unauthorized' }, 401);
   }
   return next();
+});
+
+// === Preview 路由(native 文件夹模式)===
+import { previewNativeRouter } from './preview-native.js';
+app.route('/preview', previewNativeRouter);
+
+// === 服务 __aid_inject.js (iframe 注入脚本)===
+import { readFileSync as _readSync, existsSync as _existsSync } from 'node:fs';
+import { dirname as _dirname, join as _join } from 'node:path';
+import { fileURLToPath as _fileUrlToPath } from 'node:url';
+const __srvDir = _dirname(_fileUrlToPath(import.meta.url));
+function findInjectScript(): string {
+  // 源码模式:public/__aid_inject.js;打包模式:同目录 __aid_inject.js(build 时复制)
+  const candidates = [
+    _join(__srvDir, '..', 'public', '__aid_inject.js'),
+    _join(__srvDir, '__aid_inject.js'),
+  ];
+  for (const p of candidates) {
+    if (_existsSync(p)) return _readSync(p, 'utf8');
+  }
+  return '/* __aid_inject.js not found */';
+}
+let _injectCache: string | null = null;
+app.get('/__aid_inject.js', (c) => {
+  if (!_injectCache) _injectCache = findInjectScript();
+  return new Response(_injectCache, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/javascript; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  });
 });
 
 app.get('/api/llm/config', (c) => {

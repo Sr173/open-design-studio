@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // 嵌入式启动 Hono:server/index.ts 已被 refactor 成可 import
 import { startServer, type ServerHandle } from '../server/index.js';
+import { registerIpc, stopAllWatchers } from './ipc.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,7 +66,10 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  // 先起 Hono(renderer 启动时立即需要)
+  // 注册所有 IPC handler(在 createWindow 之前 — preload 一启动就要能 invoke)
+  registerIpc(() => mainWindow);
+
+  // 起 Hono
   serverHandle = await bootHono();
   console.log(
     `[electron] embedded Hono → http://127.0.0.1:${serverHandle.port}`
@@ -84,7 +88,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', async () => {
+  await stopAllWatchers();
   serverHandle?.stop();
   serverHandle = null;
 });

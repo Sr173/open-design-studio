@@ -882,6 +882,9 @@ function actionLabel(a: UserAction): string {
   if (a.kind === 'inline_edit') {
     return `· [直改 #${a.aid}] "${a.before}" → "${a.after}"`;
   }
+  if (a.kind === 'external_edit') {
+    return `· [外部 ${a.changeKind}] ${a.path}`;
+  }
   return `· [改 tweak ${a.tweakId}] ${a.before} → ${a.after}`;
 }
 

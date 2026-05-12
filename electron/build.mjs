@@ -19,10 +19,11 @@ const outDir = path.join(rootDir, 'dist-electron');
 
 const watch = process.argv.includes('--watch');
 
-// 拷贝 skill 文件到 dist-electron/ — bundled main.mjs 的 __dirname 就在这里
+// 拷贝静态资源到 dist-electron/ — bundled main.mjs 的 __dirname 就在这里
 const MD_ASSETS = [
   ['server/skill.md', 'skill.md'],
   ['server/skill-core.md', 'skill-core.md'],
+  ['public/__aid_inject.js', '__aid_inject.js'],
 ];
 function copyAssets() {
   mkdirSync(outDir, { recursive: true });
@@ -38,12 +39,15 @@ if (watch) {
   }
 }
 
-/** electron + node 内置模块都 external,避免 bundle 进去 */
+/** electron + node 内置模块 + 含 native binding 的 npm 包都 external,避免 bundle 进去 */
 const NODE_EXTERNAL = [
   'electron',
   // node:* protocol 自动 external,但兜底列举常用
   'fs', 'path', 'crypto', 'os', 'url', 'http', 'https', 'stream', 'events',
   'child_process', 'net', 'tls', 'zlib', 'buffer', 'util', 'querystring',
+  // 含 .node native binding 的依赖 — esbuild 不会处理
+  'keytar',
+  'fsevents', // chokidar 在 macOS 用
 ];
 
 /** Hono / @hono/node-server / Anthropic SDK / OpenAI SDK 我们 bundle 进去

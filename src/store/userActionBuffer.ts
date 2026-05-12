@@ -28,6 +28,12 @@ export type UserAction =
       tweakType: string;
       before: string;
       after: string;
+    }
+  | {
+      kind: 'external_edit';
+      path: string;
+      changeKind: 'add' | 'change' | 'unlink';
+      note: string;
     };
 
 const buffer: UserAction[] = [];
@@ -69,6 +75,8 @@ export function formatBufferAsText(): string {
       lines.push(
         `- [改 tweak ${a.tweakId} ${a.tweakType}] ${a.before} → ${a.after}`
       );
+    } else if (a.kind === 'external_edit') {
+      lines.push(`- [外部 ${a.changeKind}] ${a.path}`);
     }
   }
   return lines.join('\n');

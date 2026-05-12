@@ -35,6 +35,8 @@ export interface Project {
   pinnedMessageIds?: number[];
   /** v1.7:项目级背景 brief — 跨任务共享。新建项目时引导填写,可日后改 */
   brief?: ProjectBrief | null;
+  /** v6.0b:Electron 模式下绑到本地文件夹绝对路径。null = 浏览器虚拟项目(走 IDB)*/
+  rootPath?: string | null;
 }
 
 export interface Chat {

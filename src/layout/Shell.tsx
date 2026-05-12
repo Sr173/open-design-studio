@@ -1,8 +1,14 @@
-/* Shell — 顶层布局,FileTree + PreviewPane + ChatPane,header 含项目名 + 模型 + 设置 */
+/* Shell — 顶层布局
+ *  左:ProjectsSidebar(项目 + chats 嵌套 + 设置)
+ *  中:MidPane(预览 / Questions)
+ *  右:ChatPane
+ *
+ *  顶部:slim 标题条(项目名 + git 状态 + 路径),没有按钮,所有按钮去左侧栏
+ */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FileTree } from './FileTree';
-import { ChatList } from './ChatList';
+import { ProjectsSidebar } from './ProjectsSidebar';
 import { MidPane } from './MidPane';
 import { ChatPane } from './ChatPane';
 import { ModelSettings } from '../settings/ModelSettings';
@@ -16,22 +22,24 @@ import type { LLMProvider } from '../llm/provider';
 import {
   ensureCurrentProject,
   listProjects,
-  createProject,
-  setCurrentProjectId,
-  renameProject,
 } from '../store/projects';
 import { ensureCurrentChat } from '../store/chats';
 import type { Project } from '../store/db';
 import { ProjectBriefDialog } from './ProjectBriefDialog';
+import { useProjectWatcher } from '../native/useProjectWatcher';
+import { GitStatusBadge } from './GitStatusBadge';
+import { getProjectRoot } from '../store/files';
+import { db } from '../store/db';
 
 export function Shell() {
   const [projectId, setProjectId] = useState<number | null>(null);
   const [chatId, setChatId] = useState<number | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [project, setProject] = useState<Project | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
   const [stripExport, setStripExport] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string>('index.html');
+  const [projectsBump, setProjectsBump] = useState(0); // 项目列表变化时 bump
 
   // === v1.5:provider 是单例 ClientProvider,所有调用走 /api/llm/chat
   const providerRef = useRef<LLMProvider>(new ClientProvider());
@@ -41,10 +49,8 @@ export function Shell() {
     let cancelled = false;
     (async () => {
       const id = await ensureCurrentProject();
-      const list = await listProjects();
       if (cancelled) return;
       setProjectId(id);
-      setProjects(list);
     })();
     return () => {
       cancelled = true;
@@ -64,10 +70,31 @@ export function Shell() {
     };
   }, [projectId]);
 
+  // === 当前项目元数据(rootPath / brief)===
+  const [currentRootPath, setCurrentRootPath] = useState<string | null>(null);
+  useEffect(() => {
+    if (projectId == null) return;
+    let alive = true;
+    (async () => {
+      const p = await db.projects.get(projectId);
+      const rp = await getProjectRoot(projectId);
+      if (alive) {
+        setProject(p ?? null);
+        setCurrentRootPath(rp);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [projectId, projectsBump]);
+
   const controller = useMemo<ChatController | null>(() => {
     if (projectId == null || chatId == null) return null;
     return getChatController(projectId, chatId, () => providerRef.current);
   }, [projectId, chatId]);
+
+  // Electron + native folder 项目:启动文件 watcher,外部改动自动刷预览
+  useProjectWatcher(projectId);
 
   if (projectId == null || !controller) {
     return (
@@ -86,308 +113,154 @@ export function Shell() {
   }
 
   return (
-    <ShellInner
-      projectId={projectId}
-      controller={controller}
-      project={projects.find((p) => p.id === projectId)}
-      projects={projects}
-      onSelectProject={(id) => {
-        setCurrentProjectId(id);
-        setProjectId(id);
-      }}
-      onNewProject={async () => {
-        const id = await createProject();
-        setProjectId(id);
-        setProjects(await listProjects());
-      }}
-      onRename={async (name) => {
-        await renameProject(projectId, name);
-        setProjects(await listProjects());
-      }}
-      onExport={async () => {
-        const p = projects.find((x) => x.id === projectId);
-        await exportProjectAsZip(projectId, p?.name ?? 'project', {
-          stripDevMarkers: stripExport,
-        });
-      }}
-      stripExport={stripExport}
-      toggleStripExport={() => setStripExport((v) => !v)}
-      settingsOpen={settingsOpen}
-      openSettings={() => setSettingsOpen(true)}
-      closeSettings={() => setSettingsOpen(false)}
-      briefOpen={briefOpen}
-      openBrief={() => setBriefOpen(true)}
-      closeBrief={() => setBriefOpen(false)}
-      selectedPath={selectedPath}
-      setSelectedPath={setSelectedPath}
-      onActivateChat={setChatId}
-    />
-  );
-}
-
-interface ShellInnerProps {
-  projectId: number;
-  controller: ChatController;
-  project?: Project;
-  projects: Project[];
-  onSelectProject: (id: number) => void;
-  onNewProject: () => void;
-  onRename: (name: string) => void;
-  onExport: () => void;
-  stripExport: boolean;
-  toggleStripExport: () => void;
-  settingsOpen: boolean;
-  openSettings: () => void;
-  closeSettings: () => void;
-  briefOpen: boolean;
-  openBrief: () => void;
-  closeBrief: () => void;
-  selectedPath: string;
-  setSelectedPath: (p: string) => void;
-  onActivateChat: (chatId: number) => void;
-}
-
-function ShellInner(props: ShellInnerProps) {
-  const {
-    controller,
-    projectId,
-    selectedPath,
-    setSelectedPath,
-    settingsOpen,
-    openSettings,
-    closeSettings,
-    briefOpen,
-    openBrief,
-    closeBrief,
-    onActivateChat,
-  } = props;
-
-  return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Header
-        project={props.project}
-        projects={props.projects}
-        onSelectProject={props.onSelectProject}
-        onNewProject={props.onNewProject}
-        onRename={props.onRename}
-        onOpenSettings={openSettings}
-        onOpenBrief={openBrief}
-        onExport={props.onExport}
-        stripExport={props.stripExport}
-        toggleStripExport={props.toggleStripExport}
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
+      <ProjectsSidebar
+        activeProjectId={projectId}
+        activeChatId={chatId}
+        onSelectProject={(id) => setProjectId(id)}
+        onSelectChat={(id) => setChatId(id)}
+        onProjectsChanged={() => setProjectsBump((v) => v + 1)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenBrief={() => setBriefOpen(true)}
+        onExport={async () => {
+          await exportProjectAsZip(projectId, project?.name ?? 'project', {
+            stripDevMarkers: stripExport,
+          });
+        }}
+        stripExport={stripExport}
+        toggleStripExport={() => setStripExport((v) => !v)}
       />
 
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        <div
-          style={{
-            width: 'var(--filetree-w)',
-            flex: '0 0 var(--filetree-w)',
-            display: 'flex',
-            flexDirection: 'column',
-            background: 'var(--bg-panel)',
-            borderRight: '1px solid var(--border-subtle)',
-            overflow: 'hidden',
-          }}
-        >
-          <ChatList
-            projectId={controller.projectId}
-            activeChatId={controller.chatId}
-            onActivate={onActivateChat}
-          />
-          <FileTree
-            noFrame
+      {/* 中间 + 右:用一个 flex column 包,让顶部 slim header 跨越中右两栏 */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+        <ProjectHeader
+          project={project}
+          projectId={projectId}
+          rootPath={currentRootPath}
+        />
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+          <FileTreeColumn
             projectId={projectId}
             selectedPath={selectedPath}
-            onSelect={setSelectedPath}
+            onSelectPath={setSelectedPath}
           />
+          <MidPane
+            controller={controller}
+            initialPath={
+              selectedPath.endsWith('.html') || selectedPath === 'index.html'
+                ? selectedPath
+                : 'index.html'
+            }
+          />
+          <ChatPane controller={controller} onOpenSettings={() => setSettingsOpen(true)} />
         </div>
-        <MidPane
-          controller={controller}
-          initialPath={
-            selectedPath.endsWith('.html') || selectedPath === 'index.html'
-              ? selectedPath
-              : 'index.html'
-          }
-        />
-        <ChatPane controller={controller} onOpenSettings={openSettings} />
       </div>
 
-      <ModelSettings open={settingsOpen} onClose={closeSettings} />
-
+      <ModelSettings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <ProjectBriefDialog
         projectId={projectId}
         open={briefOpen}
-        onClose={closeBrief}
+        onClose={() => setBriefOpen(false)}
       />
     </div>
   );
 }
 
-function Header({
+function ProjectHeader({
   project,
-  projects,
-  onSelectProject,
-  onNewProject,
-  onRename,
-  onOpenSettings,
-  onOpenBrief,
-  onExport,
-  stripExport,
-  toggleStripExport,
+  projectId,
+  rootPath,
 }: {
-  project?: Project;
-  projects: Project[];
-  onSelectProject: (id: number) => void;
-  onNewProject: () => void;
-  onRename: (name: string) => void;
-  onOpenSettings: () => void;
-  onOpenBrief: () => void;
-  onExport: () => void;
-  stripExport: boolean;
-  toggleStripExport: () => void;
+  project: Project | null;
+  projectId: number;
+  rootPath: string | null;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
-
   return (
     <div
       style={{
-        height: 'var(--header-h)',
-        flex: '0 0 var(--header-h)',
-        background: 'var(--bg-panel)',
-        borderBottom: '1px solid var(--border-subtle)',
+        flex: '0 0 auto',
+        height: 36,
+        padding: '0 16px',
         display: 'flex',
         alignItems: 'center',
-        padding: '0 var(--sp-4)',
-        gap: 'var(--sp-3)',
-        fontSize: 'var(--fs-sm)',
-      }}
+        gap: 12,
+        background: 'var(--bg-base)',
+        borderBottom: '1px solid var(--border-subtle)',
+        fontSize: 12,
+        WebkitAppRegion: 'drag', // macOS hiddenInset 拖窗
+      } as React.CSSProperties}
     >
-      <div style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
-        ai-design
-      </div>
-      <div style={{ color: 'var(--border-default)' }}>·</div>
-
-      <select
-        value={project?.id ?? ''}
-        onChange={(e) => onSelectProject(Number(e.target.value))}
+      <div
         style={{
-          background: 'var(--bg-input)',
-          border: '1px solid var(--border-default)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '4px 8px',
-          fontSize: 'var(--fs-sm)',
           color: 'var(--text-primary)',
-          fontFamily: 'var(--font-mono)',
-          cursor: 'pointer',
+          fontWeight: 500,
         }}
       >
-        {projects.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </select>
-
-      {editing ? (
-        <input
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => {
-            if (draft.trim()) onRename(draft.trim());
-            setEditing(false);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-            if (e.key === 'Escape') setEditing(false);
-          }}
-          style={{
-            background: 'var(--bg-input)',
-            border: '1px solid var(--accent)',
-            borderRadius: 'var(--radius-sm)',
-            padding: '3px 6px',
-            fontSize: 'var(--fs-sm)',
-            color: 'var(--text-primary)',
-          }}
-        />
-      ) : (
-        <button
-          onClick={() => {
-            setDraft(project?.name ?? '');
-            setEditing(true);
-          }}
+        {project?.name ?? '—'}
+      </div>
+      {rootPath && (
+        <div
           style={{
             color: 'var(--text-tertiary)',
-            fontSize: 'var(--fs-xs)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            maxWidth: 360,
           }}
-          title="改项目名"
+          title={rootPath}
         >
-          ✎
-        </button>
+          {rootPath}
+        </div>
       )}
-
-      <button
-        onClick={onOpenBrief}
-        style={{
-          color: 'var(--text-secondary)',
-          fontSize: 'var(--fs-xs)',
-          padding: '3px 8px',
-          borderRadius: 'var(--radius-sm)',
-          border: '1px solid var(--border-subtle)',
-          fontFamily: 'var(--font-mono)',
-        }}
-        title="项目背景(产品 / 用户 / 风格锚点 — 跨任务共享)"
-      >
-        ⚙ 项目背景
-      </button>
-
-      <button
-        onClick={onNewProject}
-        style={{
-          color: 'var(--text-tertiary)',
-          fontSize: 'var(--fs-xs)',
-        }}
-        title="新建项目"
-      >
-        + 新项目
-      </button>
-
-      <div style={{ flex: 1 }} />
-
-      <label
-        style={{
-          fontSize: 'var(--fs-xs)',
-          color: 'var(--text-tertiary)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 4,
-          cursor: 'pointer',
-        }}
-        title="导出时去掉 data-aid 等开发标记"
-      >
-        <input
-          type="checkbox"
-          checked={stripExport}
-          onChange={toggleStripExport}
-        />
-        干净版
-      </label>
-      <button onClick={onExport} style={headerBtn}>
-        导出 zip
-      </button>
-      <button onClick={onOpenSettings} style={headerBtn}>
-        设置
-      </button>
+      {!rootPath && (
+        <div
+          style={{
+            color: 'var(--text-tertiary)',
+            fontSize: 11,
+            fontStyle: 'italic',
+          }}
+          title="文件存在浏览器 IndexedDB,Electron 下可在新建对话框选本地文件夹"
+        >
+          (虚拟项目)
+        </div>
+      )}
+      <span style={{ flex: 1 }} />
+      <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        <GitStatusBadge projectId={projectId} rootPath={rootPath} />
+      </div>
     </div>
   );
 }
 
-const headerBtn: React.CSSProperties = {
-  padding: '4px 10px',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--bg-elevated)',
-  border: '1px solid var(--border-subtle)',
-  color: 'var(--text-secondary)',
-  fontSize: 'var(--fs-xs)',
-};
+function FileTreeColumn({
+  projectId,
+  selectedPath,
+  onSelectPath,
+}: {
+  projectId: number;
+  selectedPath: string;
+  onSelectPath(p: string): void;
+}) {
+  return (
+    <div
+      style={{
+        width: 200,
+        flex: '0 0 200px',
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'var(--bg-panel)',
+        borderRight: '1px solid var(--border-subtle)',
+        overflow: 'hidden',
+      }}
+    >
+      <FileTree
+        noFrame
+        projectId={projectId}
+        selectedPath={selectedPath}
+        onSelect={onSelectPath}
+      />
+    </div>
+  );
+}

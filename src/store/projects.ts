@@ -11,15 +11,27 @@ export async function listProjects(): Promise<Project[]> {
   return db.projects.orderBy('updatedAt').reverse().toArray();
 }
 
-export async function createProject(name: string = '未命名项目'): Promise<number> {
+export async function createProject(
+  name: string = '未命名项目',
+  rootPath: string | null = null
+): Promise<number> {
   const now = Date.now();
   const id = await db.projects.add({
     name,
+    rootPath,
     createdAt: now,
     updatedAt: now,
   });
   setCurrentProjectId(id as number);
   return id as number;
+}
+
+/** 给已有项目绑定/解绑本地文件夹 */
+export async function setProjectRoot(
+  id: number,
+  rootPath: string | null
+): Promise<void> {
+  await db.projects.update(id, { rootPath, updatedAt: Date.now() });
 }
 
 export async function renameProject(id: number, name: string): Promise<void> {

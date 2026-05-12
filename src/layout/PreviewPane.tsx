@@ -17,8 +17,9 @@ import { CommentBubble } from '../inspect/commentBubble';
 import { installInlineEdit } from '../inspect/inlineEdit';
 import { TweaksPanel } from './TweaksPanel';
 import { detectVariants, type VariantInfo } from '../preview/variants';
-import { listFiles, onFileChange } from '../store/files';
+import { listFiles, onFileChange, getProjectRoot } from '../store/files';
 import { onShow } from '../preview/showSignal';
+import { onWatcherRefresh } from '../native/useProjectWatcher';
 
 export interface ViewportPreset {
   label: string;
@@ -61,6 +62,25 @@ export function PreviewPane({
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const consoleRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // === 项目 rootPath(Electron 本地文件夹模式)===
+  const [rootPath, setRootPath] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getProjectRoot(projectId).then((rp) => {
+      if (alive) setRootPath(rp);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [projectId]);
+
+  // === 外部文件变动触发的本地刷新键(叠加在父组件的 refreshKey 上)===
+  const [extRefresh, setExtRefresh] = useState(0);
+  useEffect(() => {
+    return onWatcherRefresh(() => setExtRefresh((v) => v + 1));
+  }, []);
+  const combinedRefreshKey = refreshKey + extRefresh * 10000; // 不冲突即可
 
   // === 多变体探测 + 当前选中 variant ===
   const [variants, setVariants] = useState<VariantInfo[]>([]);
@@ -138,8 +158,8 @@ export function PreviewPane({
   }, [variants, activeVariantSlug, initialPath]);
 
   const url = useMemo(
-    () => previewUrl(projectId, effectivePath, refreshKey),
-    [projectId, effectivePath, refreshKey]
+    () => previewUrl(projectId, effectivePath, combinedRefreshKey, rootPath),
+    [projectId, effectivePath, combinedRefreshKey, rootPath]
   );
 
   // 订阅 preview 消息(已按 projectId 过滤)
@@ -278,6 +298,7 @@ export function PreviewPane({
           refreshKey={refreshKey}
           writingActive={!!writing?.active}
           bridge={bridge}
+          rootPath={rootPath}
           onFocusVariant={(slug) => {
             setActiveVariantSlug(slug);
             setVariantMode('single');
@@ -504,6 +525,7 @@ function VariantCanvas({
   refreshKey,
   writingActive,
   bridge,
+  rootPath,
   onFocusVariant,
 }: {
   projectId: number;
@@ -511,6 +533,7 @@ function VariantCanvas({
   refreshKey: number;
   writingActive: boolean;
   bridge: ReturnType<typeof getElementBridge>;
+  rootPath: string | null;
   onFocusVariant: (slug: string) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -654,7 +677,7 @@ function VariantCanvas({
                     if (el) iframeRefs.current.set(v.slug, el);
                     else iframeRefs.current.delete(v.slug);
                   }}
-                  src={previewUrl(projectId, v.path, refreshKey)}
+                  src={previewUrl(projectId, v.path, refreshKey, rootPath)}
                   style={{
                     width: DESIGN_W,
                     height: DESIGN_H,
