@@ -4,13 +4,18 @@
   "description": "AI + 设计师协作客户端 — 左聊天、右交互面板、AI 写 HTML 即所见",
   "type": "module",
   "private": true,
+  "main": "dist-electron/main.mjs",
   "scripts": {
     "dev": "concurrently -n server,client -c blue,magenta \"pnpm dev:server\" \"pnpm dev:client\"",
     "dev:server": "tsx watch server/index.ts",
     "dev:client": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p electron/tsconfig.json",
+    "electron:build": "node electron/build.mjs",
+    "electron:build:watch": "node electron/build.mjs --watch",
+    "electron:dev": "concurrently -n vite,esbuild,electron -c magenta,yellow,cyan \"pnpm dev:client\" \"pnpm electron:build:watch\" \"wait-on http://localhost:5173 dist-electron/main.mjs && electron dist-electron/main.mjs\"",
+    "electron:start": "electron dist-electron/main.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",
@@ -31,8 +36,12 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.2.1",
+    "electron": "^42.0.1",
+    "electron-builder": "^26.8.1",
+    "esbuild": "^0.28.0",
     "tsx": "^4.21.0",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "wait-on": "^9.0.10"
   }
 }

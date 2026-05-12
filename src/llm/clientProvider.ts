@@ -9,12 +9,13 @@ import type {
   Delta,
   LLMProvider,
 } from './provider';
+import { apiFetch } from '../native';
 
 export class ClientProvider implements LLMProvider {
   readonly name = 'openai' as const; // 占位 — 实际 provider 在后端决定
 
   async chat(req: ChatRequest): Promise<ChatResponse> {
-    const resp = await fetch('/api/llm/chat', {
+    const resp = await apiFetch('/api/llm/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: req.signal,
@@ -117,7 +118,7 @@ export interface ServerConfigInfo {
 
 export async function fetchServerConfig(): Promise<ServerConfigInfo | null> {
   try {
-    const r = await fetch('/api/llm/config');
+    const r = await apiFetch('/api/llm/config');
     if (!r.ok) return null;
     return (await r.json()) as ServerConfigInfo;
   } catch {

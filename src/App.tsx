@@ -2,14 +2,19 @@ import { useEffect, useState } from 'react';
 import { Shell } from './layout/Shell';
 import { registerPreviewSW } from './preview/swRegister';
 import { ensureDbOpen } from './store/db';
+import { initNative } from './native';
 
 export function App() {
   const [swReady, setSwReady] = useState(false);
   const [swError, setSwError] = useState(false);
   const [dbReady, setDbReady] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
+  const [nativeReady, setNativeReady] = useState(false);
 
   useEffect(() => {
+    // Electron 模式下:initNative 拿到 Hono baseUrl + token,所有后续 apiFetch 自动路由
+    // 浏览器模式下:no-op,apiFetch 走相对 /api/* 路径
+    initNative().finally(() => setNativeReady(true));
     ensureDbOpen()
       .then(() => setDbReady(true))
       .catch((e) => setDbError(e?.message ?? String(e)));
@@ -31,7 +36,7 @@ export function App() {
     );
   }
 
-  if (!dbReady || (!swReady && !swError)) {
+  if (!nativeReady || !dbReady || (!swReady && !swError)) {
     return (
       <div
         style={{

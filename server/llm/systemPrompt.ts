@@ -2,14 +2,28 @@
  * 服务端唯一持有,前端永远拿不到
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // v1.8:常驻 system 只载入精简的 core(~150 行宪法)
 // 完整章节(detectors / multi-variant / aesthetic / phase-N / tweaks)用 read_skill 按需拉
-const skillMd = readFileSync(join(__dirname, '..', 'skill-core.md'), 'utf8');
+//
+// 路径兼容:
+//   - 源码模式(tsx watch server/index.ts):__dirname=server/llm/ → ../skill-core.md
+//   - Electron 打包(dist-electron/main.mjs):__dirname=dist-electron/ → 同目录的 skill-core.md(build 时复制)
+function resolveSkillCore(): string {
+  const candidates = [
+    join(__dirname, '..', 'skill-core.md'), // 源码
+    join(__dirname, 'skill-core.md'),       // bundled
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  throw new Error(`skill-core.md not found in: ${candidates.join(' | ')}`);
+}
+const skillMd = readFileSync(resolveSkillCore(), 'utf8');
 
 export function buildSystemPrompt(): string {
   return `${skillMd}

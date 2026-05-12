@@ -7,12 +7,23 @@
  *   - sliceSection 退化保护:切出来 < 200 字符时 console.warn
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const fullSkill = readFileSync(join(__dirname, 'skill.md'), 'utf8');
+// 源码模式 __dirname=server/ → ./skill.md;Electron bundled __dirname=dist-electron/ → ./skill.md(build 时复制过去)
+function resolveSkill(): string {
+  const candidates = [
+    join(__dirname, 'skill.md'),
+    join(__dirname, '..', 'server', 'skill.md'), // 兜底
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  throw new Error(`skill.md not found in: ${candidates.join(' | ')}`);
+}
+const fullSkill = readFileSync(resolveSkill(), 'utf8');
 
 /** 从 full skill.md 切出一段(基于 markdown header) */
 function sliceSection(

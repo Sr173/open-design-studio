@@ -30,31 +30,60 @@ import type {
   ProviderMessage,
   ServerConfig,
 } from './llm/types.js';
+import type { LLMProvider } from './llm/types.js';
 
-// === 配置 ===
-const config: ServerConfig = {
+export interface StartServerOptions {
+  /** 显式端口;0 = OS 分配空闲端口(Electron 用) */
+  port?: number;
+  /** Bearer token;前端请求必须带 Authorization: Bearer <token>。omitted = 不鉴权(dev 浏览器模式) */
+  authToken?: string;
+  /** 覆盖 provider 配置;Electron 模式下从 keychain / IPC 传入 */
+  providerConfig?: {
+    provider: 'anthropic' | 'openai';
+    apiKey: string;
+    model: string;
+    baseUrl?: string;
+  };
+}
+
+export interface ServerHandle {
+  port: number;
+  authToken?: string;
+  stop(): void;
+}
+
+// === 配置 — 从 env 读默认值,可被 startServer options 覆盖 ===
+const defaultConfig: ServerConfig = {
   provider: (process.env.PROVIDER as 'anthropic' | 'openai') || 'openai',
   model: process.env.MODEL || 'gpt-5.5',
   baseUrl: process.env.BASE_URL || undefined,
   port: Number(process.env.PORT) || 5174,
 };
 
-const apiKey = process.env.API_KEY || '';
-if (!apiKey) {
-  console.warn(
-    '[server] ⚠ API_KEY 未设置 — /api/llm/chat 会失败。在 .env 里补上'
-  );
-}
+const defaultApiKey = process.env.API_KEY || '';
 
-// === 复用一个 provider 实例 ===
-let provider = apiKey
+// 当前活动 config + provider(运行时可被 updateProvider 改)
+let config: ServerConfig = { ...defaultConfig };
+let provider: LLMProvider | null = defaultApiKey
   ? createProvider({
       provider: config.provider,
-      apiKey,
+      apiKey: defaultApiKey,
       model: config.model,
       baseUrl: config.baseUrl,
     })
   : null;
+
+/** 运行时切换 provider — Electron 改 .env / 改 key 时调 */
+export function updateProvider(cfg: {
+  provider: 'anthropic' | 'openai';
+  apiKey: string;
+  model: string;
+  baseUrl?: string;
+}) {
+  config = { ...config, provider: cfg.provider, model: cfg.model, baseUrl: cfg.baseUrl };
+  provider = createProvider(cfg);
+  console.log(`[server] provider updated → ${cfg.provider} / ${cfg.model}`);
+}
 
 // === Hono app ===
 const app = new Hono();
@@ -64,16 +93,28 @@ app.use(
   cors({
     origin: '*', // dev only;生产应限同源
     allowMethods: ['GET', 'POST', 'OPTIONS'],
-    allowHeaders: ['Content-Type'],
+    allowHeaders: ['Content-Type', 'Authorization'],
   })
 );
+
+// 鉴权 — Electron 模式有 token,浏览器 dev 模式 token 为空就放行。必须在路由前注册。
+let activeAuthToken: string | undefined;
+app.use('/api/*', async (c, next) => {
+  if (c.req.path === '/api/health') return next();
+  if (!activeAuthToken) return next();
+  const got = c.req.header('Authorization');
+  if (got !== `Bearer ${activeAuthToken}`) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  return next();
+});
 
 app.get('/api/llm/config', (c) => {
   return c.json({
     provider: config.provider,
     model: config.model,
     baseUrl: config.baseUrl ?? null,
-    hasKey: !!apiKey,
+    hasKey: !!provider,
   });
 });
 
@@ -381,11 +422,60 @@ app.get('/api/skill', (c) => {
 
 app.get('/api/health', (c) => c.text('ok'));
 
-console.log(
-  `[server] ai-design backend → http://localhost:${config.port} (provider=${config.provider}, model=${config.model})`
-);
+/** 启动 Hono server。返回 ServerHandle 让调用方拿到实际 port + 可停止。
+ *
+ *  - CLI 模式(tsx watch server/index.ts):直接调用,默认 port 来自 .env
+ *  - Electron 嵌入模式:main process 调 `startServer({ port: 0, authToken, providerConfig })`,
+ *    OS 分配空闲端口;authToken 通过 preload 暴露给 renderer */
+export async function startServer(
+  opts: StartServerOptions = {}
+): Promise<ServerHandle> {
+  if (opts.providerConfig) {
+    updateProvider(opts.providerConfig);
+  }
+  if (opts.port !== undefined) config.port = opts.port;
+  activeAuthToken = opts.authToken;
 
-serve({
-  fetch: app.fetch,
-  port: config.port,
-});
+  return new Promise((resolve) => {
+    const server = serve(
+      {
+        fetch: app.fetch,
+        port: config.port,
+      },
+      (info) => {
+        const actualPort = info.port;
+        console.log(
+          `[server] ai-design backend → http://127.0.0.1:${actualPort} ` +
+            `(provider=${config.provider}, model=${config.model}, auth=${activeAuthToken ? 'on' : 'off'})`
+        );
+        resolve({
+          port: actualPort,
+          authToken: activeAuthToken,
+          stop: () => server.close(),
+        });
+      }
+    );
+  });
+}
+
+// === CLI 入口:直接 tsx 跑这个文件时自动启动 ===
+// import.meta.url 判定是否 main module(ESM 标准做法)
+const isMain = (() => {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    const argvUrl = new URL(`file://${argv1}`).href;
+    return import.meta.url === argvUrl;
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  startServer().catch((err) => {
+    console.error('[server] startup failed', err);
+    process.exit(1);
+  });
+}
+
+export { app };
