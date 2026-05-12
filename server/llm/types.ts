@@ -49,19 +49,22 @@ export interface ChatResponse {
 }
 
 export interface ProviderConfig {
-  provider: 'anthropic' | 'openai';
+  provider: 'anthropic' | 'openai' | 'gemini';
+  /** API key 或 OAuth access_token(根据 authMode 区分用法) */
   apiKey: string;
   model: string;
   baseUrl?: string;
+  /** 'apikey' = 走 X-API-Key;'oauth' = 走 Authorization Bearer + anthropic-beta oauth header */
+  authMode?: 'apikey' | 'oauth';
 }
 
 export interface LLMProvider {
-  readonly name: 'anthropic' | 'openai';
+  readonly name: 'anthropic' | 'openai' | 'gemini';
   chat(req: ChatRequest, system: string): Promise<ChatResponse>;
 }
 
 export interface ServerConfig {
-  provider: 'anthropic' | 'openai';
+  provider: 'anthropic' | 'openai' | 'gemini';
   model: string;
   baseUrl?: string;
   port: number;

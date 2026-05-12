@@ -12,6 +12,7 @@ import { ipcMain, dialog, BrowserWindow } from 'electron';
 import * as fsService from './services/fs.js';
 import * as gitService from './services/git.js';
 import * as keychainService from './services/keychain.js';
+import * as oauthService from './services/oauth.js';
 import {
   startWatcher,
   stopWatcher,
@@ -107,12 +108,30 @@ export function registerIpc(getMainWindow: () => BrowserWindow | null) {
     async (
       _e,
       cfg: {
-        provider: 'anthropic' | 'openai';
-        account: string; // keychain account 名
+        provider: 'anthropic' | 'openai' | 'gemini';
+        account: string; // keychain account 名(或 'oauth:anthropic' / 'oauth:openai-codex')
         model: string;
         baseUrl?: string;
       }
     ) => {
+      // OAuth 路径:account 是 'oauth:xxx' → 拉 access_token 而非 raw key
+      if (cfg.account.startsWith('oauth:')) {
+        const oauthProvider = cfg.account === 'oauth:anthropic' ? 'anthropic' :
+                              cfg.account === 'oauth:openai-codex' ? 'openai' : null;
+        if (!oauthProvider) throw new Error(`unknown oauth account: ${cfg.account}`);
+        const token = await oauthService.getAccessToken(oauthProvider);
+        if (!token) throw new Error(`OAuth ${oauthProvider} 未登录或 refresh 失败 — 去设置面板登录`);
+        updateProvider({
+          provider: cfg.provider,
+          apiKey: token,
+          model: cfg.model,
+          baseUrl: cfg.baseUrl,
+          authMode: 'oauth',
+        });
+        return { ok: true };
+      }
+
+      // 普通 API key 路径
       const apiKey = await keychainService.getKey(cfg.account);
       if (!apiKey) throw new Error(`keychain 里没找到 account=${cfg.account}`);
       updateProvider({
@@ -120,10 +139,22 @@ export function registerIpc(getMainWindow: () => BrowserWindow | null) {
         apiKey,
         model: cfg.model,
         baseUrl: cfg.baseUrl,
+        authMode: 'apikey',
       });
       return { ok: true };
     }
   );
+
+  // === OAuth ===
+  ipcMain.handle('oauth:login', async (_e, provider: 'anthropic' | 'openai') => {
+    if (provider === 'anthropic') return oauthService.loginAnthropic();
+    if (provider === 'openai') return oauthService.loginOpenAI();
+    throw new Error(`unknown oauth provider: ${provider}`);
+  });
+  ipcMain.handle('oauth:logout', (_e, provider: 'anthropic' | 'openai') =>
+    oauthService.logout(provider)
+  );
+  ipcMain.handle('oauth:status', () => oauthService.status());
 
   // === watcher ===
   ipcMain.handle('watcher:start', (_e, rootPath: string) => {

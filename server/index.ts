@@ -40,10 +40,11 @@ export interface StartServerOptions {
   authToken?: string;
   /** 覆盖 provider 配置;Electron 模式下从 keychain / IPC 传入 */
   providerConfig?: {
-    provider: 'anthropic' | 'openai';
+    provider: 'anthropic' | 'openai' | 'gemini';
     apiKey: string;
     model: string;
     baseUrl?: string;
+    authMode?: 'apikey' | 'oauth';
   };
 }
 
@@ -55,7 +56,7 @@ export interface ServerHandle {
 
 // === 配置 — 从 env 读默认值,可被 startServer options 覆盖 ===
 const defaultConfig: ServerConfig = {
-  provider: (process.env.PROVIDER as 'anthropic' | 'openai') || 'openai',
+  provider: (process.env.PROVIDER as 'anthropic' | 'openai' | 'gemini') || 'openai',
   model: process.env.MODEL || 'gpt-5.5',
   baseUrl: process.env.BASE_URL || undefined,
   port: Number(process.env.PORT) || 5174,
@@ -76,14 +77,15 @@ let provider: LLMProvider | null = defaultApiKey
 
 /** 运行时切换 provider — Electron 改 .env / 改 key 时调 */
 export function updateProvider(cfg: {
-  provider: 'anthropic' | 'openai';
+  provider: 'anthropic' | 'openai' | 'gemini';
   apiKey: string;
   model: string;
   baseUrl?: string;
+  authMode?: 'apikey' | 'oauth';
 }) {
   config = { ...config, provider: cfg.provider, model: cfg.model, baseUrl: cfg.baseUrl };
   provider = createProvider(cfg);
-  console.log(`[server] provider updated → ${cfg.provider} / ${cfg.model}`);
+  console.log(`[server] provider updated → ${cfg.provider} / ${cfg.model}${cfg.authMode === 'oauth' ? ' (oauth)' : ''}`);
 }
 
 // === Hono app ===

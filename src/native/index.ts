@@ -97,7 +97,7 @@ export interface NativeAPI {
   };
   provider: {
     update(cfg: {
-      provider: 'anthropic' | 'openai';
+      provider: 'anthropic' | 'openai' | 'gemini';
       account: string;
       model: string;
       baseUrl?: string;
@@ -107,6 +107,16 @@ export interface NativeAPI {
     start(rootPath: string): Promise<true>;
     stop(rootPath: string): Promise<void>;
     onChange(handler: (ev: FsChangeEvent) => void): () => void;
+  };
+  oauth: {
+    login(provider: 'anthropic' | 'openai'): Promise<{
+      accessToken: string;
+      refreshToken: string;
+      expiresAt: number;
+      provider: 'anthropic' | 'openai';
+    }>;
+    logout(provider: 'anthropic' | 'openai'): Promise<void>;
+    status(): Promise<{ anthropic: boolean; openai: boolean }>;
   };
 }
 

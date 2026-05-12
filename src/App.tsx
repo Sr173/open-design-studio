@@ -14,7 +14,13 @@ export function App() {
   useEffect(() => {
     // Electron 模式下:initNative 拿到 Hono baseUrl + token,所有后续 apiFetch 自动路由
     // 浏览器模式下:no-op,apiFetch 走相对 /api/* 路径
-    initNative().finally(() => setNativeReady(true));
+    initNative()
+      .then(async () => {
+        // 同步 active profile 到 server(覆盖 .env 的默认配置)
+        const { syncActiveProfileToServer } = await import('./store/profileSync');
+        await syncActiveProfileToServer();
+      })
+      .finally(() => setNativeReady(true));
     ensureDbOpen()
       .then(() => setDbReady(true))
       .catch((e) => setDbError(e?.message ?? String(e)));

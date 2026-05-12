@@ -158,12 +158,30 @@ const native = {
   // === provider 切换 ===
   provider: {
     update(cfg: {
-      provider: 'anthropic' | 'openai';
+      provider: 'anthropic' | 'openai' | 'gemini';
       account: string;
       model: string;
       baseUrl?: string;
     }): Promise<{ ok: true }> {
       return ipcRenderer.invoke('provider:update', cfg);
+    },
+  },
+
+  // === OAuth ===
+  oauth: {
+    login(provider: 'anthropic' | 'openai'): Promise<{
+      accessToken: string;
+      refreshToken: string;
+      expiresAt: number;
+      provider: 'anthropic' | 'openai';
+    }> {
+      return ipcRenderer.invoke('oauth:login', provider);
+    },
+    logout(provider: 'anthropic' | 'openai'): Promise<void> {
+      return ipcRenderer.invoke('oauth:logout', provider);
+    },
+    status(): Promise<{ anthropic: boolean; openai: boolean }> {
+      return ipcRenderer.invoke('oauth:status');
     },
   },
 

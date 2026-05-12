@@ -51,6 +51,8 @@ export interface Chat {
   autoFixRetries?: number;
 }
 
+export type LLMProvider = 'anthropic' | 'openai' | 'gemini';
+
 export type FileType = 'text' | 'binary';
 
 export interface ProjectFile {

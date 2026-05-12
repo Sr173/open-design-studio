@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import type { Project } from '../store/db';
 import type { ChatController } from '../store/chat';
 import { db } from '../store/db';
+import { ProfileSwitcher } from './ProfileSwitcher';
 
 export interface TopBarProps {
   project: Project | null;
@@ -117,7 +118,7 @@ export function TopBar({
         </div>
       </div>
 
-      {/* ⌘K + 设置 */}
+      {/* profile switcher + ⌘K + 设置 */}
       <div
         style={{
           display: 'flex',
@@ -126,6 +127,7 @@ export function TopBar({
           WebkitAppRegion: 'no-drag',
         } as React.CSSProperties}
       >
+        <ProfileSwitcher onOpenSettings={onOpenSettings} />
         <button className="wb-cmdk-btn" onClick={onOpenCmdPalette}>
           <span style={{ color: 'var(--text-disabled)', fontSize: 10 }}>🔍</span>
           <span className="placeholder">跳转文件 / 命令…</span>

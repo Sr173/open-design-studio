@@ -16,12 +16,22 @@ export class AnthropicProvider implements LLMProvider {
   readonly name = 'anthropic' as const;
   private client: Anthropic;
   private model: string;
+  private oauth: boolean;
 
   constructor(cfg: ProviderConfig) {
-    this.client = new Anthropic({
-      apiKey: cfg.apiKey,
-      baseURL: cfg.baseUrl,
-    });
+    this.oauth = cfg.authMode === 'oauth';
+    if (this.oauth) {
+      // OAuth 模式:用 authToken(Bearer),不带 X-API-Key
+      this.client = new Anthropic({
+        authToken: cfg.apiKey,
+        baseURL: cfg.baseUrl,
+      });
+    } else {
+      this.client = new Anthropic({
+        apiKey: cfg.apiKey,
+        baseURL: cfg.baseUrl,
+      });
+    }
     this.model = cfg.model;
   }
 
@@ -56,7 +66,10 @@ export class AnthropicProvider implements LLMProvider {
           signal: req.signal,
           headers: {
             // Opus 4.7 默认 32k 输出;加这个 beta 拉到 128k(uniapi 实测已支持)
-            'anthropic-beta': 'output-128k-2025-02-19',
+            // OAuth 模式额外加 oauth-2025-04-20 让 Claude Code 凭据可用
+            'anthropic-beta': this.oauth
+              ? 'output-128k-2025-02-19,oauth-2025-04-20'
+              : 'output-128k-2025-02-19',
           },
         }
       );
