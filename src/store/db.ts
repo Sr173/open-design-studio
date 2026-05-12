@@ -45,6 +45,8 @@ export interface Chat {
   updatedAt: number;
   /** v1.7:任务背景 — 新建任务时引导填写。AI 每次调用都会拿到 */
   task?: TaskBrief | null;
+  /** v1.8:本 chat 累计的 console-error 自动修轮数。>= 1 不再静默喂回,改为用户决定 */
+  autoFixRetries?: number;
 }
 
 export type FileType = 'text' | 'binary';

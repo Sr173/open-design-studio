@@ -17,6 +17,14 @@ import {
 import { postProcessOnWrite } from '../preview/postProcess';
 import { lookupElement, writeBack } from '../inspect/inlineEdit';
 import type { QuestionSet, Question } from './questions';
+import {
+  lintAskQuestions,
+  lintWriteFile,
+  lintVariantCommentary,
+  lintVariantSlug,
+  lintVariantProliferation,
+  lintRiskGradientAcrossVariants,
+} from './detectors';
 
 export interface ToolExecCtx {
   projectId: number;
@@ -38,12 +46,19 @@ export interface ToolResult {
   is_error?: boolean;
 }
 
+// v1.8 后:read_skill 改为 server-managed 工具,前端不再注册。
+// LLM 看到 read_skill(server 在调用 LLM 时把它注入 tools 数组),
+// 但 client 拿不到章节内容(server 内部循环跑,tool_result 透传给 client 时已脱敏)
+export const META_TOOLS: ChatToolDef[] = [];
+
 export const QUESTION_TOOLS: ChatToolDef[] = [
   {
     name: 'ask_questions',
     description:
       '把一组问题渲染成结构化表单(chip / 滑块 / 输入框)推到中间 Questions tab。' +
       '用户填完提交后会作为下一条 user message 回来。' +
+      '\n\n**调用此工具之前必须先在 chat 输出 SKILL.md Artifact 1 (Recon 块) + Artifact 2 (Pre-question brief)**。' +
+      '没有这两块直接调 ask_questions 等于跳过了 Phase 1。' +
       '\n\n用法时机:Phase 2 — 在动手写文件前,把"业务先 → 约束次 → 美学最后"的问题攒成一组(3–6 题)发出来。' +
       '比 markdown 列文字问题强 100 倍。' +
       '\n\n美学题尽量用 single/multi chip 配参考产品名;让用户点而不是描述。' +
@@ -213,7 +228,12 @@ export const V1_TOOLS: ChatToolDef[] = [
   },
 ];
 
-export const ALL_TOOLS: ChatToolDef[] = [...V1_TOOLS, ...V2_TOOLS, ...QUESTION_TOOLS];
+export const ALL_TOOLS: ChatToolDef[] = [
+  ...V1_TOOLS,
+  ...V2_TOOLS,
+  ...QUESTION_TOOLS,
+  ...META_TOOLS,
+];
 
 export async function executeTool(
   name: string,
@@ -259,6 +279,21 @@ async function execWriteFile(
   if (!isValidPath(path)) {
     return { content: `路径不合法: ${path}`, is_error: true };
   }
+
+  // === Detector lint(代码级,失败直接返 is_error,LLM 自动重试)===
+  const lintSlug = lintVariantSlug(path);
+  if (!lintSlug.ok) return { content: lintSlug.reason, is_error: true };
+
+  const lintProlif = await lintVariantProliferation(ctx.projectId, path);
+  if (!lintProlif.ok) return { content: lintProlif.reason, is_error: true };
+
+  const lintShared = await lintWriteFile(ctx.projectId, path);
+  if (!lintShared.ok) return { content: lintShared.reason, is_error: true };
+
+  const lintCommentary = lintVariantCommentary(path, content);
+  if (!lintCommentary.ok)
+    return { content: lintCommentary.reason, is_error: true };
+
   ctx.onWriteStart?.(path);
   const processed = postProcessOnWrite(path, content);
   await writeFile(ctx.projectId, path, processed, 'text', 'ai');
@@ -324,6 +359,13 @@ async function execShowToUser(
 
 async function execDone(input: any, ctx: ToolExecCtx): Promise<ToolResult> {
   const summary = String(input?.summary ?? '');
+
+  // D11 跨 variant 风险梯度检查 — 在宣告完成前最后一道闸
+  const gradient = await lintRiskGradientAcrossVariants(ctx.projectId);
+  if (!gradient.ok) {
+    return { content: gradient.reason, is_error: true };
+  }
+
   ctx.onDone?.(summary);
   return { content: `done: ${summary}` };
 }
@@ -416,6 +458,11 @@ async function execAskQuestions(
   if (questions.length === 0) {
     return { content: '没有有效问题(每题需 id/label/type)', is_error: true };
   }
+
+  // === D1 lint ===
+  const lint = lintAskQuestions({ title, questions });
+  if (!lint.ok) return { content: lint.reason, is_error: true };
+
   const set: QuestionSet = {
     title,
     questions,

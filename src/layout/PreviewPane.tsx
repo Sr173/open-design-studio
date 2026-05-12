@@ -65,6 +65,10 @@ export function PreviewPane({
   // === 多变体探测 + 当前选中 variant ===
   const [variants, setVariants] = useState<VariantInfo[]>([]);
   const [activeVariantSlug, setActiveVariantSlug] = useState<string | null>(null);
+  /** 多变体显示模式:'single' 切 tab 看一个 / 'canvas' 并排看全部 */
+  const [variantMode, setVariantMode] = useState<'single' | 'canvas'>(
+    'canvas'
+  );
 
   // 监听 AI show_to_user 信号 — 匹配到 variant 入口则切过去
   useEffect(() => {
@@ -205,12 +209,46 @@ export function PreviewPane({
           disabled={writing?.active}
         />
         {variants.length > 0 && (
-          <VariantSwitcher
-            variants={variants}
-            active={activeVariantSlug}
-            onChange={setActiveVariantSlug}
-            disabled={writing?.active}
-          />
+          <>
+            <VariantSwitcher
+              variants={variants}
+              active={activeVariantSlug}
+              onChange={(slug) => {
+                setActiveVariantSlug(slug);
+                setVariantMode('single');
+              }}
+              disabled={writing?.active}
+            />
+            {variants.length >= 2 && (
+              <button
+                onClick={() =>
+                  setVariantMode((m) => (m === 'canvas' ? 'single' : 'canvas'))
+                }
+                title={
+                  variantMode === 'canvas'
+                    ? '切回单变体焦点模式'
+                    : '并排显示全部 variants(canvas)'
+                }
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: 'var(--fs-xs)',
+                  color:
+                    variantMode === 'canvas'
+                      ? 'var(--accent)'
+                      : 'var(--text-tertiary)',
+                  background:
+                    variantMode === 'canvas'
+                      ? 'rgba(255,164,81,0.12)'
+                      : 'transparent',
+                  border: '1px solid var(--border-subtle)',
+                  fontFamily: 'var(--font-mono)',
+                }}
+              >
+                ⊞ canvas
+              </button>
+            )}
+          </>
         )}
         <div style={{ flex: 1 }} />
         {VIEWPORTS.map((v) => (
@@ -232,30 +270,43 @@ export function PreviewPane({
       </div>
 
       {/* iframe 容器 — 等比缩放适配中栏,默认不出滚动条 */}
-      <PreviewStage
-        viewport={viewport}
-        iframeRef={iframeRef}
-        url={url}
-        refreshKey={refreshKey}
-        writingActive={!!writing?.active}
-      >
-        {writing?.active && <WritingOverlay file={writing.currentFile} />}
+      {variantMode === 'canvas' && variants.length >= 2 ? (
+        <VariantCanvas
+          projectId={projectId}
+          variants={variants}
+          refreshKey={refreshKey}
+          writingActive={!!writing?.active}
+          onFocusVariant={(slug) => {
+            setActiveVariantSlug(slug);
+            setVariantMode('single');
+          }}
+        />
+      ) : (
+        <PreviewStage
+          viewport={viewport}
+          iframeRef={iframeRef}
+          url={url}
+          refreshKey={refreshKey}
+          writingActive={!!writing?.active}
+        >
+          {writing?.active && <WritingOverlay file={writing.currentFile} />}
 
-        {bridgeState.pendingComment && !writing?.active && (
-          <CommentBubble
-            target={bridgeState.pendingComment}
-            onSubmit={(text) => bridge.submitComment(text)}
-            onCancel={() => bridge.cancelComment()}
-          />
-        )}
+          {bridgeState.pendingComment && !writing?.active && (
+            <CommentBubble
+              target={bridgeState.pendingComment}
+              onSubmit={(text) => bridge.submitComment(text)}
+              onCancel={() => bridge.cancelComment()}
+            />
+          )}
 
-        {bridgeState.selection && !writing?.active && (
-          <SelectionBadge
-            ancestry={bridgeState.selection.ancestry}
-            onClear={() => bridge.clearSelection()}
-          />
-        )}
-      </PreviewStage>
+          {bridgeState.selection && !writing?.active && (
+            <SelectionBadge
+              ancestry={bridgeState.selection.ancestry}
+              onClear={() => bridge.clearSelection()}
+            />
+          )}
+        </PreviewStage>
+      )}
 
       {/* Tweaks 面板(没有 marker 时自隐) */}
       <TweaksPanel projectId={projectId} disabled={writing?.active} />
@@ -438,6 +489,168 @@ function PreviewStage({
           ✕ Esc
         </button>
       )}
+    </div>
+  );
+}
+
+/* VariantCanvas — 把 2-4 个 variant iframe 并排展示。
+ * 点 ⤢ 切到单变体焦点模式;每个 iframe 顶部显示 slug + DNA tooltip
+ */
+function VariantCanvas({
+  projectId,
+  variants,
+  refreshKey,
+  writingActive,
+  onFocusVariant,
+}: {
+  projectId: number;
+  variants: VariantInfo[];
+  refreshKey: number;
+  writingActive: boolean;
+  onFocusVariant: (slug: string) => void;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [wrapWidth, setWrapWidth] = useState(0);
+  const [wrapHeight, setWrapHeight] = useState(0);
+
+  useEffect(() => {
+    const w = wrapRef.current;
+    if (!w) return;
+    const recalc = () => {
+      setWrapWidth(w.clientWidth);
+      setWrapHeight(w.clientHeight);
+    };
+    recalc();
+    const ro = new ResizeObserver(recalc);
+    ro.observe(w);
+    return () => ro.disconnect();
+  }, []);
+
+  // 每个 variant iframe 用 1280x800 设计宽度
+  const DESIGN_W = 1280;
+  const DESIGN_H = 800;
+  const gap = 16;
+  const labelH = 36;
+  const padding = 24;
+
+  // 横向排开,每个 cell width = (wrapWidth - padding*2 - gap*(n-1)) / n
+  const cellW = Math.max(
+    240,
+    (wrapWidth - padding * 2 - gap * (variants.length - 1)) / variants.length
+  );
+  const scale = Math.min(1, cellW / DESIGN_W);
+  const cellH = DESIGN_H * scale + labelH + 8;
+  const fits = cellH + padding * 2 <= wrapHeight;
+
+  return (
+    <div
+      ref={wrapRef}
+      style={{
+        flex: 1,
+        position: 'relative',
+        overflow: fits ? 'hidden' : 'auto',
+        minHeight: 0,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          gap,
+          padding,
+          alignItems: 'flex-start',
+          justifyContent: 'center',
+        }}
+      >
+        {variants.map((v, i) => {
+          const letter = String.fromCharCode(65 + i);
+          return (
+            <div
+              key={v.slug}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                width: cellW,
+                flex: '0 0 auto',
+              }}
+            >
+              <div
+                style={{
+                  height: labelH,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '0 var(--sp-2)',
+                  fontSize: 'var(--fs-xs)',
+                  fontFamily: 'var(--font-mono)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                  {letter}
+                </span>
+                <span
+                  style={{
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={
+                    [
+                      v.dna && `DNA: ${v.dna}`,
+                      v.fits && `Fits: ${v.fits}`,
+                      v.tradeoff && `Tradeoff: ${v.tradeoff}`,
+                    ]
+                      .filter(Boolean)
+                      .join('\n') || v.slug
+                  }
+                >
+                  {v.displayName}
+                </span>
+                <button
+                  onClick={() => onFocusVariant(v.slug)}
+                  style={{
+                    padding: '2px 6px',
+                    fontSize: 'var(--fs-xs)',
+                    color: 'var(--text-tertiary)',
+                  }}
+                  title="单变体焦点模式"
+                >
+                  ⤢
+                </button>
+              </div>
+              <div
+                style={{
+                  width: cellW,
+                  height: DESIGN_H * scale,
+                  position: 'relative',
+                  background: '#fff',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-subtle)',
+                  boxShadow: 'var(--shadow-md)',
+                  overflow: 'hidden',
+                }}
+              >
+                <iframe
+                  key={`${v.slug}-${refreshKey}`}
+                  src={previewUrl(projectId, v.path, refreshKey)}
+                  style={{
+                    width: DESIGN_W,
+                    height: DESIGN_H,
+                    border: 'none',
+                    background: '#fff',
+                    transform: `scale(${scale})`,
+                    transformOrigin: '0 0',
+                    pointerEvents: writingActive ? 'none' : 'auto',
+                  }}
+                  title={`preview ${v.slug}`}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

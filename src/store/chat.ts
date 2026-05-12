@@ -53,6 +53,8 @@ export interface ChatState {
   streamingMessageId: number | null;
   /** AI 推上来的待回答问卷;非 null 时中栏切到 Questions tab */
   pendingQuestions: QuestionSet | null;
+  /** v1.8.1:自查闭环触发中(static-check 周期内) — chat 顶 banner 显示 */
+  selfCheckActive: boolean;
 }
 
 export interface SendOpts {
@@ -116,6 +118,7 @@ export class ChatController {
     errorPrompt: null,
     streamingMessageId: null,
     pendingQuestions: null,
+    selfCheckActive: false,
   };
 
   private listeners = new Set<(s: ChatState) => void>();
@@ -172,6 +175,9 @@ export class ChatController {
     const fullText = buf ? `${buf}\n\n${text}`.trim() : text.trim();
     if (!fullText && !opts.images?.length) return;
 
+    // 用户手动开始新一轮 → 重置自查 retry cap
+    await db.chats.update(this.chatId, { autoFixRetries: 0 });
+
     const blocks: Block[] = [];
     if (fullText) blocks.push({ type: 'text', text: fullText });
     if (opts.images?.length) {
@@ -187,21 +193,35 @@ export class ChatController {
     await this.runTurn();
   }
 
-  /** 用户点"修复"按钮:把 console errors 拼成消息发出 */
+  /** 用户点"修复"按钮:把 console errors 去重 + 截断 + 拼成消息发出 */
   async confirmErrorFix(): Promise<void> {
     if (this.state.running) return;
     const ep = this.state.errorPrompt;
     if (!ep) return;
     this.patch({ errorPrompt: null });
-    const text = ep.errors
+
+    // 去重(连续相同 message 合并)+ 截断(每条 stack 超 500 字符截掉中间)
+    const deduped = dedupeAndTruncateErrors(ep.errors);
+
+    // 累计 chat.autoFixRetries(用户看得到"已自动修 N 次")
+    const chat = await db.chats.get(this.chatId);
+    const next = (chat?.autoFixRetries ?? 0) + 1;
+    await db.chats.update(this.chatId, { autoFixRetries: next });
+
+    const text = deduped
       .map((e, i) => `${i + 1}. ${e.message}`)
       .join('\n');
+    const retryNote =
+      next > 1
+        ? `\n\n(这是本任务第 ${next} 次让 AI 修 console error。如果上次没修好,这次重点检查那些没解决的项,而不是又改一遍同样的代码。)`
+        : '';
+
     await this.appendMessage(
       'user',
       [
         {
           type: 'text',
-          text: `预览中出现以下 console error,请修复:\n${text}`,
+          text: `预览中出现以下 console error,请修复:\n${text}${retryNote}`,
         },
       ],
       { kind: 'console_errors' }
@@ -379,9 +399,20 @@ export class ChatController {
 
     try {
       let safetyCounter = 0;
+      const SAFETY_CAP = 50; // 复杂多变体任务:shared + 3 variants × (read + write) + ask_questions + done = ~10,留 5×余量
       while (true) {
-        if (safetyCounter++ > 30) {
-          // 防 LLM 死循环调工具(理论上 stopReason!='tool_use' 应已退出)
+        if (safetyCounter++ > SAFETY_CAP) {
+          // 喂一条 user message 告知 AI 单轮上限,后续在下一轮接着干
+          await this.appendMessage(
+            'user',
+            [
+              {
+                type: 'text',
+                text: `[系统] 单轮已调用 ${SAFETY_CAP} 个工具,达到上限。本轮强制结束 — 你的进度已经保存,用户发"继续"会接着做。`,
+              },
+            ],
+            { kind: 'chat' }
+          );
           break;
         }
 
@@ -485,7 +516,6 @@ export class ChatController {
         );
         if (toolUses.length === 0) break;
 
-        const toolResults: Block[] = [];
         const ctx: ToolExecCtx = {
           projectId: this.projectId,
           signal: this.currentAbort.signal,
@@ -494,29 +524,68 @@ export class ChatController {
           onDone,
           onAskQuestions,
         };
-        for (const t of toolUses) {
-          if (this.currentAbort.signal.aborted) {
-            throw new DOMException('Aborted', 'AbortError');
-          }
-          let result;
-          try {
-            // 把当前 tool_use_id 灌进 ctx 给 ask_questions 用
-            const callCtx: ToolExecCtx = { ...ctx, toolUseId: t.id };
-            result = await executeTool(t.name, t.input, callCtx);
-          } catch (e) {
-            if (isAbortErr(e)) throw e;
-            result = {
-              content: `tool error: ${e instanceof Error ? e.message : String(e)}`,
-              is_error: true,
+
+        // 并行化:read_file / list_files / get_element_info 这种**纯查询**可并发;
+        // write_file / delete_file / replace_element_text / show_to_user / done / ask_questions 改状态/触发 UI,必须串行(否则顺序敏感、UI flicker)
+        const READ_ONLY = new Set([
+          'read_file',
+          'list_files',
+          'get_element_info',
+        ]);
+
+        // 关键不变量:tool_result 顺序必须跟 tool_use 一致(Anthropic / OpenAI 协议)
+        // 实现:把每个 tool_use 包成 promise,按原 index 收集结果。但相邻的写工具
+        // 之间要 await(创建一个 chain),read 类可挂任意 chain 点上并行。
+        const results: Array<{ idx: number; block: Block } | null> = new Array(
+          toolUses.length
+        ).fill(null);
+        let writeChain: Promise<void> = Promise.resolve();
+        const runs: Promise<void>[] = [];
+
+        for (let i = 0; i < toolUses.length; i++) {
+          const t = toolUses[i];
+          const isRead = READ_ONLY.has(t.name);
+          const callCtx: ToolExecCtx = { ...ctx, toolUseId: t.id };
+          const exec = async () => {
+            if (this.currentAbort!.signal.aborted) {
+              throw new DOMException('Aborted', 'AbortError');
+            }
+            let result;
+            try {
+              result = await executeTool(t.name, t.input, callCtx);
+            } catch (e) {
+              if (isAbortErr(e)) throw e;
+              result = {
+                content: `tool error: ${
+                  e instanceof Error ? e.message : String(e)
+                }`,
+                is_error: true,
+              };
+            }
+            results[i] = {
+              idx: i,
+              block: {
+                type: 'tool_result',
+                tool_use_id: t.id,
+                content: result.content,
+                is_error: result.is_error,
+              },
             };
+          };
+          if (isRead) {
+            // read 类不阻塞 write 链
+            runs.push(exec());
+          } else {
+            // write 类:接在 write chain 后,串行执行
+            writeChain = writeChain.then(exec);
+            runs.push(writeChain);
           }
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: t.id,
-            content: result.content,
-            is_error: result.is_error,
-          });
         }
+        await Promise.all(runs);
+
+        const toolResults: Block[] = results
+          .filter((r): r is { idx: number; block: Block } => r != null)
+          .map((r) => r.block);
 
         // 喂 tool_result 作为下一轮 user message
         await this.appendMessage('user', toolResults);
@@ -573,17 +642,56 @@ export class ChatController {
       });
       this.currentAbort = null;
 
-      // done 后查 console errors,展示卡片(不自动喂)
+      // === done 后自查闭环 ===
       if (doneCalled) {
-        // 给 iframe 重载一点时间再抓 errors
-        setTimeout(() => {
-          const errs = getRecentErrors(this.projectId, 5000);
-          if (errs.length > 0) {
-            this.patch({
-              errorPrompt: { errors: errs.slice(-10) },
-            });
+        clearErrors(this.projectId);
+        this.patch({ selfCheckActive: true });
+        setTimeout(async () => {
+          // 自查窗口结束 — 不论是否触发新 turn,都先把 banner 摘掉
+          // (新 turn 起来后 running 会接管 UI 状态)
+          this.patch({ selfCheckActive: false });
+
+          // 防御:用户切走 / 删 chat / 锁被别人拿了 → 静默放弃自查
+          const chatStillExists = await db.chats.get(this.chatId);
+          if (!chatStillExists) {
+            console.log('[chat] selfCheck skipped: chat deleted');
+            return;
           }
-        }, 800);
+          const lockHolder = projectLocks.get(this.projectId);
+          if (lockHolder != null && lockHolder !== this.chatId) {
+            console.log('[chat] selfCheck skipped: another chat holds lock');
+            return;
+          }
+
+          const errs = getRecentErrors(this.projectId, 5000);
+          if (errs.length === 0) return;
+          const dedup = dedupeAndTruncateErrors(errs).slice(-10);
+          const retries = chatStillExists.autoFixRetries ?? 0;
+
+          if (retries < 1) {
+            await db.chats.update(this.chatId, { autoFixRetries: retries + 1 });
+            const lines = dedup
+              .map((e, i) => `${i + 1}. ${e.message}`)
+              .join('\n');
+            await this.appendMessage(
+              'user',
+              [
+                {
+                  type: 'text',
+                  text:
+                    '[自查闭环] 预览刚才报了以下 console error,在 done 之前请补改一次 ' +
+                    '(只允许一次自动修;若改完还出错,会让用户决定):\n' +
+                    lines,
+                },
+              ],
+              { kind: 'console_errors' }
+            );
+            clearErrors(this.projectId);
+            await this.runTurn();
+          } else {
+            this.patch({ errorPrompt: { errors: dedup } });
+          }
+        }, 3000);
       }
     }
   }
@@ -616,30 +724,92 @@ export class ChatController {
     return this.streamingBlocks;
   }
 
-  /** v1.5 简化:本地拼接掐头摘要,不再额外调一次 LLM
-   *  (后端拥有 system prompt;额外的 summarize 调用要单独后端端点,留给后续) */
+  /** 本地摘要(无 LLM 二次调用):
+   *  - **所有 user message 全保留**(可能含用户钉过的决策 / 重要指令)
+   *  - assistant message 中只 keep tool_use 调用清单 + 摘掉 long text
+   *  - tool_result 摘短 */
   private async summarizeOld(
     _provider: LLMProvider,
     old: ProviderMessage[]
   ): Promise<string> {
-    const lines = old.slice(-30).map((m) => {
-      const t = m.blocks
-        .map((b) => {
-          if (b.type === 'text') return b.text.slice(0, 200);
-          if (b.type === 'tool_use') return `[tool ${b.name}]`;
-          if (b.type === 'tool_result') {
-            const c = typeof b.content === 'string' ? b.content : '[blocks]';
-            return `[tool_result] ${c.slice(0, 100)}`;
-          }
-          if (b.type === 'image') return '[image]';
-          return '';
-        })
-        .filter(Boolean)
-        .join(' / ');
-      return `${m.role.toUpperCase()}: ${t}`;
-    });
-    return `(早期对话已截断;最近 ${lines.length} 条片段)\n${lines.join('\n')}`;
+    const lines: string[] = [];
+    for (const m of old) {
+      if (m.role === 'user') {
+        // 全文保留 user message 文本(可能含决策 / kind='chat' 等)
+        const text = m.blocks
+          .map((b) => {
+            if (b.type === 'text') return b.text;
+            if (b.type === 'tool_result') {
+              const c = typeof b.content === 'string' ? b.content : '[blocks]';
+              return `[tool_result] ${c.slice(0, 200)}`;
+            }
+            if (b.type === 'image') return '[image]';
+            return '';
+          })
+          .filter(Boolean)
+          .join(' / ');
+        if (text) lines.push(`USER: ${text}`);
+      } else {
+        // assistant:摘 text 头 300 字符 + 列 tool_use 调用清单
+        const parts: string[] = [];
+        for (const b of m.blocks) {
+          if (b.type === 'text' && b.text) parts.push(b.text.slice(0, 300));
+          if (b.type === 'tool_use')
+            parts.push(`[tool ${b.name}](${tryJsonHead(b.input)})`);
+        }
+        if (parts.length) lines.push(`AI: ${parts.join(' · ')}`);
+      }
+    }
+    return `[历史摘要 — user 消息全保留,AI 输出截断]\n${lines.join('\n')}`;
   }
+}
+
+function tryJsonHead(input: unknown): string {
+  try {
+    return JSON.stringify(input).slice(0, 80);
+  } catch {
+    return '...';
+  }
+}
+
+/** 错误去重:指纹 = 头 80 字符(分类) + 尾 50 字符(定位)+ 长度
+ *  React 类错误前缀长一致,具体组件名在尾;这种指纹保留区分度
+ */
+function dedupeAndTruncateErrors(
+  errors: { message: string; ts: number }[]
+): { message: string; ts: number }[] {
+  const seen = new Map<
+    string,
+    { message: string; ts: number; count: number }
+  >();
+  for (const e of errors) {
+    const msg = e.message;
+    const head = msg.slice(0, 80);
+    const tail = msg.length > 130 ? msg.slice(-50) : '';
+    const key = `${head}|${tail}|${msg.length}`;
+    const exist = seen.get(key);
+    if (exist) {
+      exist.count += 1;
+      if (e.ts > exist.ts) exist.ts = e.ts;
+    } else {
+      seen.set(key, {
+        message: truncateMid(msg, 500),
+        ts: e.ts,
+        count: 1,
+      });
+    }
+  }
+  return Array.from(seen.values()).map(({ message, ts, count }) => ({
+    message: count > 1 ? `${message}  (×${count})` : message,
+    ts,
+  }));
+}
+
+function truncateMid(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const head = Math.floor(max * 0.6);
+  const tail = max - head - 8;
+  return `${s.slice(0, head)}…[truncated]…${s.slice(-tail)}`;
 }
 
 /** 把项目钉板内容拼成一段 brief 文本(放在新 chat 的 messages 最前) */

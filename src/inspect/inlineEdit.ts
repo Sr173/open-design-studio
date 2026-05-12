@@ -13,6 +13,7 @@ import {
   writeFile,
   isValidPath,
 } from '../store/files';
+import { postProcessOnWrite } from '../preview/postProcess';
 
 let installedFor = new Set<number>();
 
@@ -54,7 +55,10 @@ export async function writeBack(
 
     const next = replaceTextContent(f.content, aid, after);
     if (next !== f.content) {
-      await writeFile(projectId, f.path, next, 'text', source);
+      // 走一次 postProcess:newText 里可能含新 HTML 元素(<span>/<a>/...),
+      // 这些新元素需要 data-aid 才能被后续 inspect / Tweak 命中
+      const processed = postProcessOnWrite(f.path, next);
+      await writeFile(projectId, f.path, processed, 'text', source);
     }
     return { found: true, path: f.path };
   }

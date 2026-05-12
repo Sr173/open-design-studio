@@ -91,6 +91,11 @@ export function buildSummarizePrompt(): string {
 - 当前文件结构概况
 - 未解决的问题 / 用户没拍板的选择
 
+**必须原样保留(任何指代都靠它们):**
+- 所有 \`data-aid="xxxxxxxx"\` 引用(用户后续会用这些 ID 指代元素)
+- 所有 \`TWEAK id="xxx"\` marker 名(用户后续会用这些拉控件)
+- 所有 variant slug (\`variants/<slug>/index.html\`) — 不要简称
+
 不要保留:寒暄、已完成且确定的细节、工具调用日志、错误回滚痕迹。
 直接输出摘要文本,不要前缀。`;
 }

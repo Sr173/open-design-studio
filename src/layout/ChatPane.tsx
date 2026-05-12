@@ -24,15 +24,21 @@ import {
 import {
   getSnapshotForTurn,
   rollback,
+  redo,
+  getDryRun,
   hasSeenRollbackWarning,
   markRollbackWarningSeen,
+  type DryRunFileDiff,
 } from '../store/snapshots';
+import { db } from '../store/db';
+import type { Snapshot } from '../store/db';
 import { isPinned, togglePin, emitPinnedChange, onPinnedChange } from '../store/pinned';
 import {
   getBuffer,
   subscribe as subscribeBuffer,
   clearBuffer,
   setIdleFlushHandler,
+  setInputFocused,
   type UserAction,
 } from '../store/userActionBuffer';
 
@@ -184,6 +190,28 @@ export function ChatPane({ controller, onOpenSettings }: ChatPaneProps) {
           />
         )}
 
+        {/* 自查闭环进行中 — 微提示,3 秒后消失或转为新 turn */}
+        {state.selfCheckActive && (
+          <div
+            style={{
+              padding: '4px 10px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(108, 201, 143, 0.08)',
+              border: '1px solid var(--success)',
+              fontSize: 'var(--fs-xs)',
+              color: 'var(--success)',
+              fontFamily: 'var(--font-mono)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              marginTop: 4,
+            }}
+          >
+            <span>◌</span>
+            <span>AI 自查中(3 秒)— 若发现 console error 会自动修一轮</span>
+          </div>
+        )}
+
         {/* 等待问卷 — 提示用户去 Questions tab */}
         {!state.running && state.pendingQuestions && (
           <div
@@ -271,6 +299,8 @@ export function ChatPane({ controller, onOpenSettings }: ChatPaneProps) {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKey}
           onPaste={handlePaste}
+          onFocus={() => setInputFocused(true)}
+          onBlur={() => setInputFocused(false)}
           placeholder="Cmd/Ctrl + Enter 发送 — 试试问:做一个 SaaS 落地页"
           rows={3}
           style={{
@@ -331,22 +361,26 @@ function MessageView({
   const blocks = isStreaming && streamingBlocks ? streamingBlocks : message.blocks;
   const isUser = message.role === 'user';
   const turnId = message.turnId;
-  const [snapshotId, setSnapshotId] = useState<number | null>(null);
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [dryRunOpen, setDryRunOpen] = useState(false);
 
   useEffect(() => {
     if (!turnId || message.role !== 'assistant') return;
     let cancelled = false;
-    (async () => {
-      const snap = await getSnapshotForTurn(controller.projectId, turnId);
-      if (!cancelled) setSnapshotId(snap?.id ?? null);
-    })();
+    const refresh = async () => {
+      const s = await db.snapshots
+        .where({ projectId: controller.projectId, turnId })
+        .first();
+      if (!cancelled) setSnapshot(s ?? null);
+    };
+    refresh();
     return () => {
       cancelled = true;
     };
   }, [turnId, controller.projectId, message.role, message.interrupted]);
 
   async function handleRollback() {
-    if (snapshotId == null) return;
+    if (snapshot?.id == null) return;
     if (!(await hasSeenRollbackWarning())) {
       const ok = window.confirm(
         '回滚会撤销这一轮 AI 和你自己的所有改动,确认?\n(下次不再提示)'
@@ -354,9 +388,20 @@ function MessageView({
       if (!ok) return;
       await markRollbackWarningSeen();
     }
-    await rollback(snapshotId);
+    await rollback(snapshot.id);
     controller.triggerRefresh();
-    setSnapshotId(null);
+    // refresh snapshot 状态(redoable)
+    const s = await db.snapshots.get(snapshot.id);
+    setSnapshot(s ?? null);
+    setDryRunOpen(false);
+  }
+
+  async function handleRedo() {
+    if (snapshot?.id == null) return;
+    await redo(snapshot.id);
+    controller.triggerRefresh();
+    const s = await db.snapshots.get(snapshot.id);
+    setSnapshot(s ?? null);
   }
 
   // 找配套 tool_result(下一条 user message 里 by tool_use_id)— 简化:不在 UI 里 join,UI 仅展示 input
@@ -436,26 +481,21 @@ function MessageView({
         }}
       >
         {blocks.map((b, i) => (
-          <BlockView key={i} block={b} />
+          <BlockView key={i} block={b} streaming={isStreaming} />
         ))}
         {!isUser && isStreaming && blocks.length === 0 && (
           <span style={{ color: 'var(--text-tertiary)' }}>…</span>
         )}
       </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        {snapshotId != null && !isStreaming && (
-          <button
-            onClick={handleRollback}
-            style={{
-              fontSize: 'var(--fs-xs)',
-              color: 'var(--text-tertiary)',
-              fontFamily: 'var(--font-mono)',
-              padding: 0,
-            }}
-            title="撤销这一轮 AI + 你的所有改动"
-          >
-            ↶ 回滚此轮
-          </button>
+        {!isStreaming && snapshot != null && (
+          <RollbackControl
+            snapshot={snapshot}
+            dryRunOpen={dryRunOpen}
+            setDryRunOpen={setDryRunOpen}
+            onRollback={handleRollback}
+            onRedo={handleRedo}
+          />
         )}
         {canPin && (
           <button
@@ -476,16 +516,158 @@ function MessageView({
           </button>
         )}
       </div>
+
+      {dryRunOpen && snapshot && (
+        <DryRunPanel
+          diffs={getDryRun(snapshot)}
+          rolledBack={!!snapshot.rolledBack}
+          onConfirm={snapshot.rolledBack ? handleRedo : handleRollback}
+          onCancel={() => setDryRunOpen(false)}
+        />
+      )}
     </div>
   );
 }
 
-function BlockView({ block }: { block: Block }) {
+function RollbackControl({
+  snapshot,
+  dryRunOpen,
+  setDryRunOpen,
+  onRollback,
+  onRedo,
+}: {
+  snapshot: Snapshot;
+  dryRunOpen: boolean;
+  setDryRunOpen: (v: boolean) => void;
+  onRollback: () => void;
+  onRedo: () => void;
+}) {
+  const fileCount = snapshot.diff.length;
+  if (snapshot.rolledBack) {
+    return (
+      <button
+        onClick={onRedo}
+        style={{
+          fontSize: 'var(--fs-xs)',
+          color: 'var(--accent)',
+          fontFamily: 'var(--font-mono)',
+        }}
+        title={`已回滚。点击恢复这一轮的 ${fileCount} 个文件改动`}
+      >
+        ↷ 恢复此轮
+      </button>
+    );
+  }
+  return (
+    <button
+      onClick={() => setDryRunOpen(!dryRunOpen)}
+      style={{
+        fontSize: 'var(--fs-xs)',
+        color: 'var(--text-tertiary)',
+        fontFamily: 'var(--font-mono)',
+      }}
+      title={`查看会被还原的 ${fileCount} 个文件`}
+    >
+      {dryRunOpen ? '↶ 收起' : `↶ 回滚此轮 (${fileCount})`}
+    </button>
+  );
+}
+
+function DryRunPanel({
+  diffs,
+  rolledBack,
+  onConfirm,
+  onCancel,
+}: {
+  diffs: DryRunFileDiff[];
+  rolledBack: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const actionLabel: Record<DryRunFileDiff['action'], string> = {
+    created: '新建',
+    modified: '修改',
+    deleted: '删除',
+  };
+  const actionColor: Record<DryRunFileDiff['action'], string> = {
+    created: 'var(--success)',
+    modified: 'var(--accent)',
+    deleted: 'var(--error)',
+  };
+  return (
+    <div
+      style={{
+        marginTop: 4,
+        padding: 'var(--sp-2) var(--sp-3)',
+        border: '1px solid var(--border-default)',
+        background: 'var(--bg-elevated)',
+        borderRadius: 'var(--radius-sm)',
+        fontSize: 'var(--fs-xs)',
+        fontFamily: 'var(--font-mono)',
+      }}
+    >
+      <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>
+        本轮共 {diffs.length} 个文件改动 — 回滚会反转以下:
+      </div>
+      <div style={{ maxHeight: 140, overflow: 'auto', marginBottom: 6 }}>
+        {diffs.map((d) => (
+          <div
+            key={d.path}
+            style={{
+              display: 'flex',
+              gap: 8,
+              padding: '1px 0',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <span style={{ color: actionColor[d.action], width: 32 }}>
+              {actionLabel[d.action]}
+            </span>
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {d.path}
+            </span>
+            <span style={{ color: 'var(--text-tertiary)' }}>
+              {d.beforeLines} → {d.afterLines} 行
+            </span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        <button onClick={onCancel} style={{ color: 'var(--text-tertiary)' }}>
+          取消
+        </button>
+        <button
+          onClick={onConfirm}
+          style={{
+            color: 'var(--accent)',
+            fontWeight: 600,
+          }}
+        >
+          {rolledBack ? '↷ 恢复' : '↶ 确认回滚'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BlockView({
+  block,
+  streaming,
+}: {
+  block: Block;
+  streaming?: boolean;
+}) {
   if (block.type === 'text') {
     return <Markdown text={block.text} />;
   }
   if (block.type === 'tool_use') {
-    return <ToolCallBlock name={block.name} input={block.input} />;
+    return (
+      <ToolCallBlock
+        name={block.name}
+        input={block.input}
+        streaming={streaming}
+      />
+    );
   }
   if (block.type === 'tool_result') {
     // tool_result 通常出现在 user message 里;UI 上简单处理

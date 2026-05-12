@@ -7,7 +7,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const skillMd = readFileSync(join(__dirname, '..', 'skill.md'), 'utf8');
+// v1.8:常驻 system 只载入精简的 core(~150 行宪法)
+// 完整章节(detectors / multi-variant / aesthetic / phase-N / tweaks)用 read_skill 按需拉
+const skillMd = readFileSync(join(__dirname, '..', 'skill-core.md'), 'utf8');
 
 export function buildSystemPrompt(): string {
   return `${skillMd}

@@ -15,12 +15,14 @@ import {
   type ProjectFile,
   type Snapshot,
 } from './db';
-import { listFiles, writeFile, deleteFile } from './files';
+import { listFiles, readFile, writeFile, deleteFile, onFileChange } from './files';
 
 interface CaptureSession {
   projectId: number;
   turnId: string;
-  beforeMap: Map<string, { type: FileType; content: string }>;
+  /** 仅记录被改过的 path → 第一次写入前的状态(null = 原本不存在) */
+  beforeByPath: Map<string, { type: FileType; content: string } | null>;
+  unsub: () => void;
 }
 
 const active = new Map<string, CaptureSession>();   // turnId -> session
@@ -29,12 +31,24 @@ export async function startCapture(
   projectId: number,
   turnId: string
 ): Promise<void> {
-  const files = await listFiles(projectId);
-  const beforeMap = new Map<string, { type: FileType; content: string }>();
-  for (const f of files) {
-    beforeMap.set(f.path, { type: f.type, content: f.content });
-  }
-  active.set(turnId, { projectId, turnId, beforeMap });
+  // v1.8:不再 listFiles 全库 snapshot,改成监听 onFileChange 增量收集
+  // 每个 path 第一次出现时记 prev(从 onFileChange.prevContent 拿),后续变化不覆盖
+  const beforeByPath = new Map<
+    string,
+    { type: FileType; content: string } | null
+  >();
+  const unsub = onFileChange((e) => {
+    if (e.projectId !== projectId) return;
+    if (beforeByPath.has(e.path)) return;
+    if (e.prevContent == null) {
+      beforeByPath.set(e.path, null); // 新建
+    } else {
+      // 当前 file 的 type 在 writeFile 时确定;读 prev type 简化做法:
+      // 假设 dirty 文件类型不会切(text/binary)。若需要可异步读取存档,但代价大。
+      beforeByPath.set(e.path, { type: 'text', content: e.prevContent });
+    }
+  });
+  active.set(turnId, { projectId, turnId, beforeByPath, unsub });
 }
 
 export async function commitCapture(
@@ -44,37 +58,34 @@ export async function commitCapture(
   const sess = active.get(turnId);
   if (!sess) return null;
   active.delete(turnId);
+  sess.unsub();
 
-  const after = await listFiles(sess.projectId);
-  const afterMap = new Map<string, ProjectFile>();
-  for (const f of after) afterMap.set(f.path, f);
+  if (sess.beforeByPath.size === 0) return null; // 没改动
 
+  // 只对 dirty path 算 diff
   const diff: FileDiff[] = [];
-  // 找出修改 + 删除
-  for (const [path, before] of sess.beforeMap) {
-    const cur = afterMap.get(path);
+  for (const [path, before] of sess.beforeByPath) {
+    const cur = await readFile(sess.projectId, path);
     if (!cur) {
-      diff.push({ path, before, after: null });   // 删除
-    } else if (cur.content !== before.content || cur.type !== before.type) {
-      diff.push({
-        path,
-        before,
-        after: { type: cur.type, content: cur.content },
-      });
+      // 当前不存在 — 这一 turn 是删除操作
+      if (before) {
+        diff.push({ path, before, after: null });
+      }
+      continue;
     }
-  }
-  // 找出新建
-  for (const [path, cur] of afterMap) {
-    if (!sess.beforeMap.has(path)) {
-      diff.push({
-        path,
-        before: null,
-        after: { type: cur.type, content: cur.content },
-      });
+    const afterEntry = { type: cur.type, content: cur.content };
+    if (!before) {
+      // 新建
+      diff.push({ path, before: null, after: afterEntry });
+    } else if (
+      before.content !== cur.content ||
+      before.type !== cur.type
+    ) {
+      diff.push({ path, before, after: afterEntry });
     }
   }
 
-  if (diff.length === 0) return null;   // 没改动不存
+  if (diff.length === 0) return null;
 
   const id = await db.snapshots.add({
     projectId: sess.projectId,
@@ -106,6 +117,49 @@ export async function rollback(snapshotId: number): Promise<void> {
     }
   }
   await db.snapshots.update(snapshotId, { rolledBack: true });
+}
+
+/** 反向操作 — 把已经 rolledBack 的 snapshot 重新应用(redo) */
+export async function redo(snapshotId: number): Promise<void> {
+  const snap = await db.snapshots.get(snapshotId);
+  if (!snap || !snap.rolledBack) return;
+  for (const d of snap.diff) {
+    if (d.after == null) {
+      // 原本是删除操作 → redo 仍删
+      await deleteFile(snap.projectId, d.path, 'system');
+    } else {
+      await writeFile(
+        snap.projectId,
+        d.path,
+        d.after.content,
+        d.after.type,
+        'system'
+      );
+    }
+  }
+  await db.snapshots.update(snapshotId, { rolledBack: false });
+}
+
+/** 生成 dry-run 预览数据 — 列出会被还原的文件 + 短 diff 摘要 */
+export interface DryRunFileDiff {
+  path: string;
+  /** 该文件本轮发生了什么:created/modified/deleted */
+  action: 'created' | 'modified' | 'deleted';
+  /** 行数变化:before → after */
+  beforeLines: number;
+  afterLines: number;
+}
+
+export function getDryRun(snapshot: { diff: FileDiff[] }): DryRunFileDiff[] {
+  return snapshot.diff.map((d) => {
+    let action: DryRunFileDiff['action'];
+    if (d.before == null) action = 'created';
+    else if (d.after == null) action = 'deleted';
+    else action = 'modified';
+    const beforeLines = d.before?.content.split('\n').length ?? 0;
+    const afterLines = d.after?.content.split('\n').length ?? 0;
+    return { path: d.path, action, beforeLines, afterLines };
+  });
 }
 
 export async function getSnapshotForTurn(

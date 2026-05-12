@@ -34,6 +34,8 @@ const buffer: UserAction[] = [];
 const listeners = new Set<() => void>();
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 const IDLE_MS = 5000;
+/** 输入框获取焦点时设 true,自动 flush 会推迟到失焦后 — 否则用户思考时 buffer 突然飞出去 */
+let inputFocused = false;
 
 export function pushAction(a: UserAction): void {
   buffer.push(a);
@@ -93,10 +95,26 @@ export function setIdleFlushHandler(fn: (() => void) | null): void {
   onIdleFlushFn = fn;
 }
 
+/** ChatPane 输入框 focus / blur 时调用,避免用户打字时 buffer 自动飞出去 */
+export function setInputFocused(focused: boolean): void {
+  inputFocused = focused;
+  // 失焦时如果还有挂起的 buffer,立即重启计时;有焦点时取消现有计时
+  if (focused) {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  } else if (buffer.length > 0) {
+    scheduleIdleFlush();
+  }
+}
+
 function scheduleIdleFlush() {
   if (idleTimer) clearTimeout(idleTimer);
+  if (inputFocused) return;  // 输入中不 flush
   idleTimer = setTimeout(() => {
     idleTimer = null;
+    if (inputFocused) return; // 计时到了又抢焦点,放弃 flush
     onIdleFlushFn?.();
   }, IDLE_MS);
 }

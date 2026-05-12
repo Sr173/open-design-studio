@@ -8,9 +8,11 @@ export interface ToolCallBlockProps {
   name: string;
   input: any;
   result?: { content: string; is_error?: boolean };
+  /** 流式中(args 还在累积),显示小圈 */
+  streaming?: boolean;
 }
 
-export function ToolCallBlock({ name, input, result }: ToolCallBlockProps) {
+export function ToolCallBlock({ name, input, result, streaming }: ToolCallBlockProps) {
   const [open, setOpen] = useState(false);
   const summary = makeSummary(name, input);
   const errored = result?.is_error;
@@ -41,8 +43,24 @@ export function ToolCallBlock({ name, input, result }: ToolCallBlockProps) {
         <span style={{ color: 'var(--accent)' }}>→</span>
         <span style={{ color: 'var(--text-primary)' }}>{name}</span>
         <span style={{ flex: 1, color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {summary}
+          {summary || (streaming ? '正在拼参数…' : '')}
         </span>
+        {streaming && !result && (
+          <>
+            <style>{`@keyframes aidTbcSpin { to { transform: rotate(360deg); } }`}</style>
+            <span
+              style={{
+                width: 9,
+                height: 9,
+                borderRadius: '50%',
+                border: '1.5px solid var(--border-default)',
+                borderTopColor: 'var(--accent)',
+                animation: 'aidTbcSpin 0.7s linear infinite',
+                display: 'inline-block',
+              }}
+            />
+          </>
+        )}
         {result && !errored && (
           <span style={{ color: 'var(--success)' }}>✓</span>
         )}
