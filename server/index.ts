@@ -46,6 +46,8 @@ export interface StartServerOptions {
     baseUrl?: string;
     authMode?: 'apikey' | 'oauth';
   };
+  /** 把 dist/ 静态文件挂到根路径上;Electron packaged 模式用 — renderer loadURL 到本 server */
+  serveStaticDir?: string;
 }
 
 export interface ServerHandle {
@@ -484,6 +486,78 @@ export async function startServer(
   }
   if (opts.port !== undefined) config.port = opts.port;
   activeAuthToken = opts.authToken;
+
+  // === SPA 静态文件 serving(packaged Electron 用)===
+  // 注册在最后,前面的 /api/* 和 /preview/* 路由不受影响
+  if (opts.serveStaticDir) {
+    const staticRoot = opts.serveStaticDir;
+    const { readFile } = await import('node:fs/promises');
+    const { extname, join: pj, normalize: pn } = await import('node:path');
+
+    const MIME: Record<string, string> = {
+      '.html': 'text/html; charset=utf-8',
+      '.js': 'application/javascript; charset=utf-8',
+      '.mjs': 'application/javascript; charset=utf-8',
+      '.css': 'text/css; charset=utf-8',
+      '.json': 'application/json; charset=utf-8',
+      '.svg': 'image/svg+xml',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.ico': 'image/x-icon',
+      '.woff': 'font/woff',
+      '.woff2': 'font/woff2',
+      '.ttf': 'font/ttf',
+      '.map': 'application/json',
+    };
+
+    // SW 注册 scope = '/' 要求 SW 文件 header 含 Service-Worker-Allowed
+    app.get('/sw.js', async (c) => {
+      try {
+        const buf = await readFile(pj(staticRoot, 'sw.js'));
+        return new Response(buf, {
+          headers: {
+            'Content-Type': 'application/javascript; charset=utf-8',
+            'Service-Worker-Allowed': '/',
+            'Cache-Control': 'no-store',
+          },
+        });
+      } catch {
+        return c.text('sw.js not found', 404);
+      }
+    });
+
+    // catch-all 静态文件 + SPA fallback
+    app.get('*', async (c) => {
+      const reqPath = new URL(c.req.url).pathname;
+      const safePath = pn(reqPath).replace(/^\/+/, '');
+      const ext = extname(safePath).toLowerCase();
+      try {
+        if (ext) {
+          // 有后缀 = 静态资源
+          const buf = await readFile(pj(staticRoot, safePath));
+          return new Response(buf, {
+            headers: {
+              'Content-Type': MIME[ext] ?? 'application/octet-stream',
+              'Cache-Control': ext === '.html' ? 'no-store' : 'public, max-age=31536000',
+            },
+          });
+        }
+      } catch { /* fall through to index.html */ }
+      // SPA fallback
+      try {
+        const buf = await readFile(pj(staticRoot, 'index.html'));
+        return new Response(buf, {
+          headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+        });
+      } catch {
+        return c.text('not found', 404);
+      }
+    });
+    console.log(`[server] static SPA serving from ${staticRoot}`);
+  }
 
   return new Promise((resolve) => {
     const server = serve(

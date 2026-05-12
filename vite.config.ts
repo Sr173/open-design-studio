@@ -2,6 +2,10 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
+  // Electron prod 模式下 renderer 走 file:// 协议加载 dist/index.html;
+  // 默认 base '/' 会被解析成根目录而非 dist/ → 资源全 404 → 黑屏。
+  // './' 让所有 asset 引用变成相对路径,file:// 也能找到。
+  base: './',
   plugins: [react()],
   server: {
     port: 5173,

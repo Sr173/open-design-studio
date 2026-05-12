@@ -31,7 +31,10 @@ async function bootHono(): Promise<ServerHandle> {
   // prod:用 0 让 OS 给空闲端口
   const port = IS_DEV ? 5174 : 0;
   const authToken = randomBytes(24).toString('hex');
-  return startServer({ port, authToken });
+  // packaged 模式:让 Hono 顺便 serve dist/ 静态文件;renderer loadURL Hono baseUrl
+  // 这样:① 资源走 http:// 不受 file:// 协议限制 ② SW 能注册 ③ /api/* 同源不用 CORS
+  const serveStaticDir = IS_DEV ? undefined : path.join(__dirname, '..', 'dist');
+  return startServer({ port, authToken, serveStaticDir });
 }
 
 async function createWindow() {
@@ -55,8 +58,10 @@ async function createWindow() {
     await win.loadURL('http://localhost:5173');
     // DevTools 不自动开;⌘⌥I 手动呼出
   } else {
-    const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
-    await win.loadFile(indexPath);
+    // Hono 在 packaged 模式下 serve dist/ + /api/*,renderer 走 http 同源
+    // serverHandle 已在 app.whenReady 里 await 出来
+    if (!serverHandle) throw new Error('Hono server not ready');
+    await win.loadURL(`http://127.0.0.1:${serverHandle.port}/`);
   }
 
   win.on('closed', () => {
