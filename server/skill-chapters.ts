@@ -1,7 +1,10 @@
 /* Skill 章程章节 — read_skill 工具的数据源
  *
- * 每个章节按需注入,不进入常驻 system prompt(避免注意力摊薄)。
- * 章节用 ASCII id(detectors / multi-variant / aesthetic / phase-1...8 / tweaks)。
+ * v1.9 改进:
+ *   - 启动时**全部章节预渲染**进内存(章节数 < 15),后续 read_skill 走 O(1) lookup
+ *   - phase-N 8 个章节合并成 "phases-build"(Phase 4-6) + "phases-iterate"(Phase 7-8),
+ *     phase-1/2/3 保留单独(早期独立步骤,LLM 通常只需要其中一个)
+ *   - sliceSection 退化保护:切出来 < 200 字符时 console.warn
  */
 
 import { readFileSync } from 'node:fs';
@@ -12,9 +15,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const fullSkill = readFileSync(join(__dirname, 'skill.md'), 'utf8');
 
 /** 从 full skill.md 切出一段(基于 markdown header) */
-function sliceSection(startMarker: RegExp, endMarker?: RegExp): string {
+function sliceSection(
+  sectionId: string,
+  startMarker: RegExp,
+  endMarker?: RegExp
+): string {
   const start = startMarker.exec(fullSkill);
-  if (!start) return '';
+  if (!start) {
+    console.warn(`[skill-chapters] ${sectionId}: start marker 未命中`);
+    return '';
+  }
   const after = fullSkill.slice(start.index);
   if (!endMarker) return after;
   const end = endMarker.exec(after);
@@ -22,32 +32,53 @@ function sliceSection(startMarker: RegExp, endMarker?: RegExp): string {
   return after.slice(0, end.index);
 }
 
-const SECTIONS: Record<string, () => string> = {
+function buildSections(): Record<string, string> {
+  const out: Record<string, string> = {};
+
   // 完整 detectors 列表(D1-D16)
-  detectors: () =>
-    sliceSection(/^## Self-Check Detectors/m, /^## /m),
+  out.detectors = sliceSection(
+    'detectors',
+    /^## Self-Check Detectors/m,
+    /^## /m
+  );
 
-  // 多变体所有规则
-  'multi-variant': () => {
-    const phase4 = sliceSection(/^### Phase 4 — Sketch \+ Checkpoint/m, /^### Phase 5 /m);
-    const phase5 = sliceSection(/^### Phase 5 — Extract shared/m, /^### Phase 6/m);
-    const phase6 = sliceSection(/^### Phase 6 — Variants/m, /^### Phase 7/m);
-    const phase7 = sliceSection(/^### Phase 7 — Iterate/m, /^### Phase 8/m);
-    return [
-      '# Multi-variant chapter (Phase 4-7 selected)',
-      phase4,
-      phase5,
-      phase6,
-      phase7,
-    ].join('\n\n');
-  },
+  // Phase 1-3(早期独立)
+  out['phase-1'] = sliceSection('phase-1', /^### Phase 1 /m, /^### Phase 2 /m);
+  out['phase-2'] = sliceSection('phase-2', /^### Phase 2 /m, /^### Phase 3 /m);
+  out['phase-3'] = sliceSection('phase-3', /^### Phase 3 /m, /^### Phase 4 /m);
 
-  aesthetic: () =>
-    sliceSection(/^## Aesthetic guidance/m, /^## /m),
+  // 多变体核心:Phase 4 commitment + 5 shared + 6 variants
+  const phase4 = sliceSection('phase-4', /^### Phase 4 /m, /^### Phase 5 /m);
+  const phase5 = sliceSection('phase-5', /^### Phase 5 /m, /^### Phase 6 /m);
+  const phase6 = sliceSection('phase-6', /^### Phase 6 /m, /^### Phase 7 /m);
+  out['phases-build'] = [
+    '# Build phases (4-6) — sketch + checkpoint + shared + variants',
+    phase4,
+    phase5,
+    phase6,
+  ].join('\n\n');
 
-  tweaks: () => {
-    // Tweak marker 在 v3 runtime mapping coda 里;这里返回 marker schema 提示
-    return `# Tweak marker schema (per file type)
+  // Iterate + deliver
+  const phase7 = sliceSection('phase-7', /^### Phase 7 /m, /^### Phase 8 /m);
+  // phase-8 终止符:用下一个 ## 二级标题(比 ^--- 安全)
+  const phase8 = sliceSection('phase-8', /^### Phase 8 /m, /^## /m);
+  out['phases-iterate'] = [
+    '# Iterate + Deliver phases (7-8)',
+    phase7,
+    phase8,
+  ].join('\n\n');
+
+  // multi-variant 别名 → phases-build(语义重合,留两个 id 方便 AI 想到哪个用哪个)
+  out['multi-variant'] = out['phases-build'];
+
+  out.aesthetic = sliceSection(
+    'aesthetic',
+    /^## Aesthetic guidance/m,
+    /^## /m
+  );
+
+  // Tweak marker schema — 内联文字(独立于 skill.md,因为 skill.md 主要讲 prototype scope)
+  out.tweaks = `# Tweak marker schema (per file type)
 
 HTML:
 \`\`\`html
@@ -75,25 +106,28 @@ Single-literal values only. Complex expressions: don't mark.
 
 Good places: brand color var, hero headline, key spacing number, density toggle.
 Bad places: dynamic computed values, anything inside arrays/objects.`;
-  },
 
-  'phase-1': () => sliceSection(/^### Phase 1 /m, /^### Phase 2 /m),
-  'phase-2': () => sliceSection(/^### Phase 2 /m, /^### Phase 3 /m),
-  'phase-3': () => sliceSection(/^### Phase 3 /m, /^### Phase 4 /m),
-  'phase-4': () => sliceSection(/^### Phase 4 /m, /^### Phase 5 /m),
-  'phase-5': () => sliceSection(/^### Phase 5 /m, /^### Phase 6 /m),
-  'phase-6': () => sliceSection(/^### Phase 6 /m, /^### Phase 7 /m),
-  'phase-7': () => sliceSection(/^### Phase 7 /m, /^### Phase 8 /m),
-  'phase-8': () => sliceSection(/^### Phase 8 /m, /^---/m),
-};
+  // === Sanity check:每个 section 长度 ===
+  for (const [k, v] of Object.entries(out)) {
+    if (v.trim().length < 200) {
+      console.warn(
+        `[skill-chapters] ⚠ section "${k}" 切出来 ${v.length} 字符,可能 skill.md 结构变了。检查 sliceSection regex。`
+      );
+    }
+  }
+
+  return out;
+}
+
+// 启动时一次性预渲染(章节数有限,~10 个)
+const SECTIONS_CACHE: Record<string, string> = buildSections();
 
 export function listSkillSections(): string[] {
-  return Object.keys(SECTIONS);
+  return Object.keys(SECTIONS_CACHE);
 }
 
 export function readSkillSection(section: string): string | null {
-  const fn = SECTIONS[section];
-  if (!fn) return null;
-  const body = fn().trim();
-  return body || null;
+  const body = SECTIONS_CACHE[section];
+  if (!body) return null;
+  return body.trim() || null;
 }

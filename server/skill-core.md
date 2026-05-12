@@ -63,10 +63,21 @@ Other detectors fire situationally — call `read_skill("detectors")` for the fu
 
 For runtime-mapping (tool names, file conventions) see the appended *"Runtime mapping (this client)"* section below.
 
-For deep detail on any phase, call `read_skill("phase-N")` (1-8).
-For detectors D5–D16, call `read_skill("detectors")`.
-For aesthetic vocabulary / typography pairings / decorative atoms, call `read_skill("aesthetic")`.
-For multi-variant rules (risk gradient / carrier / shared discipline / recombine / lock), call `read_skill("multi-variant")`.
-For Tweak marker schema, call `read_skill("tweaks")`.
+## When to call `read_skill` (proactive, not last-resort)
 
-**Do not call `read_skill` speculatively** — only when you're about to take an action and need the chapter to do it right.
+Core above is intentionally short. Detailed chapters are **on demand** but you should reach for them in these moments:
+
+| Trigger | Section to read |
+|---|---|
+| User asks for "几个方向 / A/B / multiple variants / 对比" | `multi-variant` |
+| You're about to enter Phase 5 (writing files) and Phase 1 declared multi-variant | `multi-variant` + `phases-build` |
+| You're about to write Tweak marker comments | `tweaks` |
+| User gave a reference anchor (Linear / Stripe / Apple / ...) you want to embody well | `aesthetic` |
+| User feedback feels ambiguous — could be Inline edit vs v2 vs Tweak vs Recombine | `phases-iterate` |
+| You suspect a detector beyond D1-D4 might fire (D5 = AI-slop tells / D7 = edge-state coverage / etc.) | `detectors` |
+
+**Default behavior**: when starting a non-trivial multi-variant task, the first thing you do after Phase 1 recon is usually `read_skill("multi-variant")`. This is not speculative — it's preparing to act.
+
+Skip `read_skill` only when the task is genuinely small (text tweak / single file / Inline edit on an existing variant) — Core suffices.
+
+Available sections: `detectors` · `multi-variant` · `aesthetic` · `tweaks` · `phases-build` (Phase 4-6) · `phases-iterate` (Phase 7-8) · `phase-1` `phase-2` `phase-3` (single-phase deep dive when needed).

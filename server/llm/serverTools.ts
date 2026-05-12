@@ -15,14 +15,23 @@ export const SERVER_TOOLS: ChatToolDef[] = [
   {
     name: 'read_skill',
     description:
-      '按需读 design-work skill 的章节(常驻 system 只载入精简 core,详细章节用此工具拉)。' +
-      '\n\n可用 section:\n' +
-      '  - "detectors" — 全部 D1-D16 自检规则\n' +
-      '  - "multi-variant" — 风险梯度 / 变化轴 / 承载方式 / shared 纪律 / 重组协议 / 锁定 / 子变体\n' +
-      '  - "aesthetic" — 字体配对 / 装饰原子 / 不要默认 SaaS / 完整 vocabulary\n' +
-      '  - "tweaks" — Tweak marker 三种语法 + 适用类型\n' +
-      '  - "phase-1" ~ "phase-8" — 单 phase 详细要求\n' +
-      '\n**不要无目的调用** — 只在你即将执行某动作且需要章节细节时拉。',
+      '加载 design-work skill 详细章节(常驻 system 只有精简 core,完整章节按需拉)。' +
+      '\n\n**主动调用场景**(不要等到撞墙才拉):\n' +
+      '  - 多变体任务 → 第一时间拉 "multi-variant"\n' +
+      '  - 即将进 Phase 5 写文件 → 拉 "phases-build"\n' +
+      '  - 用户给参考产品(Linear/Stripe/Apple/...) → 拉 "aesthetic"\n' +
+      '  - 写 Tweak marker 前 → 拉 "tweaks"\n' +
+      '  - 用户反馈分类(Inline edit vs v2 vs Tweak)→ 拉 "phases-iterate"\n' +
+      '  - 任何超出 core D1-D4 的 detector → 拉 "detectors"\n' +
+      '\n可用 section:\n' +
+      '  - "detectors" — 全部 D1-D16\n' +
+      '  - "multi-variant" — 风险梯度 / 变化轴 / 承载方式 / shared 纪律 / 重组协议\n' +
+      '  - "aesthetic" — 字体配对 / 装饰原子 / 反 SaaS\n' +
+      '  - "tweaks" — Tweak marker 三种语法\n' +
+      '  - "phases-build" — Phase 4-6 (sketch + shared + variants)\n' +
+      '  - "phases-iterate" — Phase 7-8 (iterate + deliver)\n' +
+      '  - "phase-1" / "phase-2" / "phase-3" — 单 phase 深入\n' +
+      '\n准备充分比临时抱佛脚强;读完才动手。',
     input_schema: {
       type: 'object',
       properties: {
@@ -66,7 +75,7 @@ export function execServerTool(
     }
     return {
       realContent: body,
-      placeholderContent: `[read_skill section="${section}" loaded server-side, ${body.length} chars — content stays on server]`,
+      placeholderContent: `[read_skill section="${section}" loaded server-side]`,
     };
   }
   return {
