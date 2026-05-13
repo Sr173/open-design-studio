@@ -20,7 +20,7 @@
  * 失败时:Cloudflare/网络等错误时也返回 null,UI fallback 到 preset 推荐
  */
 
-import * as keychainService from './keychain.js';
+import * as keychainService from './secureStore.js';
 import * as oauthService from './oauth.js';
 
 export interface ListModelsResult {

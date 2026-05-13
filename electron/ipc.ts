@@ -11,7 +11,7 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
 import * as fsService from './services/fs.js';
 import * as gitService from './services/git.js';
-import * as keychainService from './services/keychain.js';
+import * as keychainService from './services/secureStore.js';
 import * as oauthService from './services/oauth.js';
 import * as modelsListService from './services/modelsList.js';
 import { getInstallationId } from './services/installationId.js';

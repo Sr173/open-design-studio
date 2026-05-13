@@ -47,7 +47,6 @@
     "dotenv": "^17.4.2",
     "hono": "^4.12.18",
     "jszip": "^3.10.1",
-    "keytar": "^7.9.0",
     "nanoid": "^5.0.9",
     "node-html-parser": "^7.1.0",
     "openai": "^4.79.0",

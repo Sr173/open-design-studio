@@ -18,7 +18,7 @@ import { shell } from 'electron';
 import { createServer, type Server } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { URL, URLSearchParams } from 'node:url';
-import { setKey, getKey, deleteKey } from './keychain.js';
+import { setKey, getKey, deleteKey } from './secureStore.js';
 
 export interface OAuthTokens {
   accessToken: string;

@@ -18,9 +18,8 @@ files:
   - "!**/.{idea,git,DS_Store}"
   - "!**/{tsconfig.json,tslint.json,.eslintrc,.eslintignore,.prettierrc}"
 
-# native 模块(keytar / chokidar fsevents)需要原生 binding,electron-builder 自动 rebuild
-asarUnpack:
-  - "**/node_modules/keytar/**/*"
+# keytar 已被 Electron safeStorage 替代 — 不再需要 native binding 解压
+# chokidar 的 fsevents native 在 macOS 上由 electron-builder + @electron/rebuild 自动处理
 
 # ───────── macOS DMG ─────────
 mac:

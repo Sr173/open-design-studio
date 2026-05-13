@@ -46,7 +46,6 @@ const NODE_EXTERNAL = [
   'fs', 'path', 'crypto', 'os', 'url', 'http', 'https', 'stream', 'events',
   'child_process', 'net', 'tls', 'zlib', 'buffer', 'util', 'querystring',
   // 含 .node native binding 的依赖 — esbuild 不会处理
-  'keytar',
   'fsevents', // chokidar 在 macOS 用
 ];
 
