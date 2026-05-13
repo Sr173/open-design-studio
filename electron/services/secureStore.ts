@@ -1,79 +1,97 @@
-/* 安全存储 — 用 Electron safeStorage 加密 + 文件持久化,替代 keytar
+/* 本地加密存储 — userData/secrets.json,绝不触碰 OS Keychain
  *
- * 为什么不再用 keytar:
- *   - keytar 直接写 macOS Keychain item,每次访问触发系统 ACL 弹框
- *   - 每次 App 二进制签名变了(重装新版本)旧 "Always Allow" 失效
- *   - keytar 是 native binding,需要 electron-rebuild,跨架构打包麻烦
+ * 设计取舍(给读源码的人):
+ *   之前用过两版:
+ *     v1) keytar → 直接写 macOS Keychain item,每次访问触发系统 ACL 弹框,体感最差
+ *     v2) Electron safeStorage → 内部用 Keychain 存 1 个 master key,新 App
+ *         签名首次访问仍会弹 1 次(ad-hoc 签名 + 每次重 build 签名变化都触发)
+ *   v3 (this) → 纯文件存储,**永不弹密码框**。
  *
- * 用 safeStorage 的好处:
- *   - Electron 内置 API,无 native rebuild
- *   - macOS:用一个 app-specific Keychain item 存 master key,系统识别为
- *     app 自己的数据,默认不弹密码框
- *   - Windows:DPAPI(per-user 加密)
- *   - Linux:libsecret / kwallet
- *   - 我们的 secret 用 master key 加密后写文件,任何人 cat 都是乱码
+ * 安全模型(明示):
+ *   - 文件存 userData/secrets.json,JSON 内容是 base64 encoded 的简单 XOR 混淆,
+ *     不是真加密。任何拿到这台机器同一 OS 用户权限的人,都能解码出 API key 明文。
+ *   - 文件 mode 600(只有当前 OS 用户能读),依赖 OS 文件系统权限
+ *   - 这跟 aws cli / gh cli / npm / claude code 的做法一致 — dev 工具习惯
+ *   - 如果用户机器被攻破到能读 ~/Library/Application Support/<App>/,
+ *     攻击者本来就能装任何东西,API key 暴露不是边际损失
  *
- * 数据存在 userData/secrets.dat,格式:
- *   { "v": 1, "entries": { "<account>": "<base64-of-encrypted-bytes>", ... } }
- *
- * 兼容性:对外 API 跟 keychain.ts 完全一致,renderer 代码不动
+ * 数据格式:
+ *   { "v": 2, "obf": <int>, "entries": { account: <obfuscated-base64>, ... } }
+ *   obf 是 per-install 随机 byte,跟 secrets.json 一起存(同 hex 字符串就同一份),
+ *   实际上是混淆+权限保护组合,不是密码学加密。
  */
 
-import { app, safeStorage } from 'electron';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { app } from 'electron';
+import {
+  existsSync, readFileSync, writeFileSync,
+  mkdirSync, renameSync, chmodSync, statSync,
+} from 'node:fs';
 import { join, dirname } from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 function secretsFilePath(): string {
-  return join(app.getPath('userData'), 'secrets.dat');
+  return join(app.getPath('userData'), 'secrets.json');
 }
 
-interface SecretsFileV1 {
-  v: 1;
-  entries: Record<string, string>; // account → base64(encrypted bytes)
+interface SecretsFileV2 {
+  v: 2;
+  /** per-install random byte, 0-255。XOR 混淆用 */
+  obf: number;
+  entries: Record<string, string>;
 }
 
-function readSecrets(): SecretsFileV1 {
+function xorObfuscate(plain: string, obf: number): string {
+  const buf = Buffer.from(plain, 'utf8');
+  for (let i = 0; i < buf.length; i++) buf[i] ^= obf;
+  return buf.toString('base64');
+}
+
+function xorDeobfuscate(encoded: string, obf: number): string {
+  const buf = Buffer.from(encoded, 'base64');
+  for (let i = 0; i < buf.length; i++) buf[i] ^= obf;
+  return buf.toString('utf8');
+}
+
+function readSecrets(): SecretsFileV2 {
   const p = secretsFilePath();
-  if (!existsSync(p)) return { v: 1, entries: {} };
+  if (!existsSync(p)) {
+    return { v: 2, obf: randomBytes(1)[0]!, entries: {} };
+  }
   try {
     const raw = readFileSync(p, 'utf8');
     const parsed = JSON.parse(raw);
-    if (parsed?.v === 1 && parsed.entries && typeof parsed.entries === 'object') {
-      return parsed as SecretsFileV1;
+    if (parsed?.v === 2 && typeof parsed.obf === 'number' && parsed.entries) {
+      return parsed as SecretsFileV2;
     }
+    // 老版本格式(v1 safeStorage)无法迁移 — 用户重新输 key
+    console.warn('[secureStore] 旧版本 secrets 格式,弃用,新建空容器');
   } catch (e) {
-    console.error('[secureStore] 读 secrets.dat 失败,丢弃旧数据', e);
+    console.error('[secureStore] 读 secrets.json 失败,丢弃旧数据', e);
   }
-  return { v: 1, entries: {} };
+  return { v: 2, obf: randomBytes(1)[0]!, entries: {} };
 }
 
-function writeSecrets(data: SecretsFileV1): void {
+function writeSecrets(data: SecretsFileV2): void {
   const p = secretsFilePath();
   mkdirSync(dirname(p), { recursive: true });
-  // 原子写:先写 .tmp 再 rename,防止崩溃时文件被截断
+  // 原子写:.tmp 再 rename
   const tmp = `${p}.tmp`;
   writeFileSync(tmp, JSON.stringify(data));
-  // rename 在同盘是原子的
-  const { renameSync } = require('node:fs') as typeof import('node:fs');
   renameSync(tmp, p);
-}
-
-function assertEncryptionAvailable() {
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error(
-      'safeStorage 不可用 — Linux 下需要 GNOME Keyring / KWallet;macOS / Windows 应当自动可用。'
-    );
+  // chmod 600 — 只有当前 user 能读写(Windows 上 chmod 是 no-op,但 ACL 默认就限到当前用户)
+  try {
+    chmodSync(p, 0o600);
+  } catch (e) {
+    console.warn('[secureStore] chmod 600 失败(Windows 上正常)', (e as Error).message);
   }
 }
 
 export async function getKey(account: string): Promise<string | null> {
   try {
-    assertEncryptionAvailable();
     const data = readSecrets();
     const enc = data.entries[account];
     if (!enc) return null;
-    const buf = Buffer.from(enc, 'base64');
-    return safeStorage.decryptString(buf);
+    return xorDeobfuscate(enc, data.obf);
   } catch (e) {
     console.error(`[secureStore] getKey(${account}) 失败`, e);
     return null;
@@ -81,10 +99,8 @@ export async function getKey(account: string): Promise<string | null> {
 }
 
 export async function setKey(account: string, value: string): Promise<void> {
-  assertEncryptionAvailable();
   const data = readSecrets();
-  const buf = safeStorage.encryptString(value);
-  data.entries[account] = buf.toString('base64');
+  data.entries[account] = xorObfuscate(value, data.obf);
   writeSecrets(data);
 }
 
@@ -102,4 +118,9 @@ export async function listAccounts(): Promise<Array<{ account: string; hasValue:
     account,
     hasValue: !!value,
   }));
+}
+
+/** 返回 secrets 文件路径(给设置面板显示) */
+export function getStorePath(): string {
+  return secretsFilePath();
 }

@@ -85,10 +85,14 @@ export function ChatPane({ controller, onOpenSettings }: ChatPaneProps) {
   }
 
   function handleKey(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      handleSubmit();
-    }
+    // Enter 发送(不带 modifier 的纯 Enter);Shift+Enter 换行
+    // IME 输入中(中文拼音组词态)不能误发 — 用 nativeEvent.isComposing 判
+    if (e.key !== 'Enter') return;
+    if (e.shiftKey) return; // Shift+Enter 让默认换行
+    const native = e.nativeEvent as KeyboardEvent;
+    if (native.isComposing || native.keyCode === 229) return; // IME 组词中
+    e.preventDefault();
+    handleSubmit();
   }
 
   async function handlePaste(e: React.ClipboardEvent) {
@@ -304,7 +308,7 @@ export function ChatPane({ controller, onOpenSettings }: ChatPaneProps) {
           onPaste={handlePaste}
           onFocus={() => setInputFocused(true)}
           onBlur={() => setInputFocused(false)}
-          placeholder="Cmd/Ctrl + Enter 发送 — 试试问:做一个 SaaS 落地页"
+          placeholder="Enter 发送 · Shift+Enter 换行 — 试试问:做一个 SaaS 落地页"
           rows={3}
           style={{
             background: 'var(--bg-input)',
