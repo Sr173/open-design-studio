@@ -377,9 +377,11 @@ function PreviewStage({
   const wrapRef = useRef<HTMLDivElement>(null);
   const [fullscreen, setFullscreen] = useState(false);
 
-  // Preview 模式 = hand tool;其它模式(inspect/comment/edit)留出 iframe 交互,
-  // 只在空格 / 中键 / Cmd 时进入 pan
-  const handMode = mode === 'preview' && !writingActive;
+  // 单 iframe 预览模式:iframe 默认可交互(wheel 滚动 / click / hover),
+  // pan 通过显式手势触发(空格 / 中键 / Cmd+drag);zoom 通过 Cmd+wheel(__aid_inject 转发)。
+  // 之前 handMode 跟 mode='preview' 绑,导致 iframe 永远 pointer-events:none,wheel 失效。
+  // canvas (多变体并排) 模式才需要默认 handMode — 那块代码在 VariantCanvas,跟这里独立。
+  const handMode = false;
 
   const pz = useCanvasPanZoom({
     wrapRef,
