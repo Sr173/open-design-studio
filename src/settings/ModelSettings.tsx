@@ -365,13 +365,50 @@ function OAuthPanel() {
   const [busy, setBusy] = useState<'anthropic' | 'openai' | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  // 跟踪每个 OAuth provider 当前选的 model(从 IDB profile 读)
+  const [models, setModels] = useState<{ anthropic: string; openai: string }>({
+    anthropic: '',
+    openai: '',
+  });
 
   async function refresh() {
     const n = native();
     if (!n) return;
-    setSt(await n.oauth.status());
+    const [status, profiles] = await Promise.all([n.oauth.status(), listProfiles()]);
+    setSt(status);
+    const aProfile = profiles.find((p) => p.presetId === 'oauth:anthropic');
+    const oProfile = profiles.find((p) => p.presetId === 'oauth:openai-codex');
+    const aPreset = getPresetById('anthropic-oauth')!;
+    const oPreset = getPresetById('openai-oauth-codex')!;
+    setModels({
+      anthropic: aProfile?.model || aPreset.models[0],
+      openai: oProfile?.model || oPreset.models[0],
+    });
   }
   useEffect(() => { refresh(); }, []);
+
+  /** 写 profile + 推 server。登录后 + 改 model 都走这里。 */
+  async function applyProfile(provider: 'anthropic' | 'openai', model: string) {
+    const n = native();
+    if (!n) return;
+    const presetId = provider === 'anthropic' ? 'anthropic-oauth' : 'openai-oauth-codex';
+    const preset = getPresetById(presetId)!;
+    const account = `oauth:${provider === 'anthropic' ? 'anthropic' : 'openai-codex'}`;
+    await saveProfile({
+      name: preset.label,
+      presetId: account,
+      provider: preset.provider,
+      model,
+      baseUrl: preset.baseUrl ?? null,
+    });
+    await n.provider.update({
+      provider: preset.provider,
+      account,
+      model,
+      baseUrl: preset.baseUrl,
+    });
+    await setActiveProfile(account);
+  }
 
   async function login(provider: 'anthropic' | 'openai') {
     const n = native();
@@ -382,29 +419,30 @@ function OAuthPanel() {
     try {
       await n.oauth.login(provider);
       await refresh();
-      // 登录成功 → 自动建 profile + 激活
-      const presetId = provider === 'anthropic' ? 'anthropic-oauth' : 'openai-oauth-codex';
-      const preset = getPresetById(presetId)!;
-      await saveProfile({
-        name: preset.label,
-        presetId: `oauth:${provider === 'anthropic' ? 'anthropic' : 'openai-codex'}`,
-        provider: preset.provider,
-        model: preset.models[0],
-        baseUrl: preset.baseUrl ?? null,
-      });
-      // provider.update 会检测 'oauth:*' 前缀 → 走 OAuth 路径
-      await n.provider.update({
-        provider: preset.provider,
-        account: `oauth:${provider === 'anthropic' ? 'anthropic' : 'openai-codex'}`,
-        model: preset.models[0],
-        baseUrl: preset.baseUrl,
-      });
-      await setActiveProfile(`oauth:${provider === 'anthropic' ? 'anthropic' : 'openai-codex'}`);
+      // 登录成功 → 用当前选的 model(默认是 preset.models[0])建 profile + 激活
+      const preset = getPresetById(
+        provider === 'anthropic' ? 'anthropic-oauth' : 'openai-oauth-codex'
+      )!;
+      const model = (provider === 'anthropic' ? models.anthropic : models.openai) || preset.models[0];
+      await applyProfile(provider, model);
       setMsg('✓ 登录成功 & 已激活');
     } catch (e: any) {
       setErr(e?.message ?? String(e));
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function changeModel(provider: 'anthropic' | 'openai', model: string) {
+    setModels((m) => ({ ...m, [provider]: model }));
+    if (!st[provider]) return; // 没登录就不推 server
+    setErr(null);
+    setMsg(null);
+    try {
+      await applyProfile(provider, model);
+      setMsg(`✓ 已切到 ${model}`);
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
     }
   }
 
@@ -429,6 +467,9 @@ function OAuthPanel() {
         subtitle="Pro / Team / Enterprise · 用 Claude Code 的 OAuth 端点"
         logged={st.anthropic}
         busy={busy === 'anthropic'}
+        models={getPresetById('anthropic-oauth')!.models}
+        selectedModel={models.anthropic}
+        onModelChange={(m) => changeModel('anthropic', m)}
         onLogin={() => login('anthropic')}
         onLogout={() => logout('anthropic')}
       />
@@ -437,6 +478,9 @@ function OAuthPanel() {
         subtitle="Plus / Team · 用 Codex CLI 的 OAuth 端点"
         logged={st.openai}
         busy={busy === 'openai'}
+        models={getPresetById('openai-oauth-codex')!.models}
+        selectedModel={models.openai}
+        onModelChange={(m) => changeModel('openai', m)}
         onLogin={() => login('openai')}
         onLogout={() => logout('openai')}
       />
@@ -445,7 +489,7 @@ function OAuthPanel() {
       {msg && <div style={{ color: 'var(--success, #4ade80)', fontSize: 12 }}>{msg}</div>}
 
       <div style={footnoteStyle}>
-        登录后:浏览器弹出授权页 → 完成后自动回到 App。token 走本地 callback (http://127.0.0.1:54321 / :1455)
+        登录后:浏览器弹出授权页 → 完成后自动回到 App。token 走本地 callback (http://127.0.0.1:54545 / :1455)
         交换,verifier 永不出本机。
       </div>
     </div>
@@ -453,37 +497,60 @@ function OAuthPanel() {
 }
 
 function OAuthCard({
-  title, subtitle, logged, busy, onLogin, onLogout,
+  title, subtitle, logged, busy, models, selectedModel, onModelChange, onLogin, onLogout,
 }: {
-  title: string; subtitle: string; logged: boolean; busy: boolean;
-  onLogin(): void; onLogout(): void;
+  title: string;
+  subtitle: string;
+  logged: boolean;
+  busy: boolean;
+  models: string[];
+  selectedModel: string;
+  onModelChange(m: string): void;
+  onLogin(): void;
+  onLogout(): void;
 }) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 12,
+      display: 'flex', flexDirection: 'column', gap: 10,
       padding: 12,
       border: '1px solid var(--border-subtle)',
       borderRadius: 'var(--radius-md)',
       background: 'var(--surface-1)',
     }}>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>{title}</div>
-        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>{subtitle}</div>
-        <div style={{
-          fontSize: 11,
-          marginTop: 6,
-          color: logged ? 'var(--success, #4ade80)' : 'var(--text-disabled)',
-        }}>
-          {logged ? '● 已登录' : '○ 未登录'}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>{title}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>{subtitle}</div>
+          <div style={{
+            fontSize: 11,
+            marginTop: 6,
+            color: logged ? 'var(--success, #4ade80)' : 'var(--text-disabled)',
+          }}>
+            {logged ? '● 已登录' : '○ 未登录'}
+          </div>
         </div>
+        {logged ? (
+          <button onClick={onLogout} style={btnSecondary}>登出</button>
+        ) : (
+          <button onClick={onLogin} disabled={busy} style={btnPrimary}>
+            {busy ? '等待授权…' : '登录'}
+          </button>
+        )}
       </div>
-      {logged ? (
-        <button onClick={onLogout} style={btnSecondary}>登出</button>
-      ) : (
-        <button onClick={onLogin} disabled={busy} style={btnPrimary}>
-          {busy ? '等待授权…' : '登录'}
-        </button>
-      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', minWidth: 36 }}>Model</span>
+        <select
+          value={selectedModel}
+          onChange={(e) => onModelChange(e.target.value)}
+          style={{ ...selectStyle, flex: 1 }}
+          disabled={!logged}
+          title={logged ? '切换 model 立即生效' : '登录后才能选 model'}
+        >
+          {models.map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+        </select>
+      </div>
     </div>
   );
 }
