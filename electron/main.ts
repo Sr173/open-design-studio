@@ -54,7 +54,7 @@ app.commandLine.appendSwitch('use-mock-keychain'); // macOS 上特别有效
 // (老用户升级到新版无缝过渡,旧目录保留不删,可手动清)
 {
   const oldUserData = app.getPath('userData'); // setPath 之前 = 默认值
-  const newUserData = path.join(homedir(), '.design');
+  const newUserData = path.join(homedir(), '.design-studio');
   if (existsSync(oldUserData) && !existsSync(newUserData)) {
     try {
       mkdirSync(newUserData, { recursive: true });
