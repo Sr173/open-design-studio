@@ -1258,14 +1258,17 @@ async function execGenerateImage(
 async function execDone(input: any, ctx: ToolExecCtx): Promise<ToolResult> {
   const summary = String(input?.summary ?? '');
 
-  // D11 跨 variant 风险梯度检查 — 在宣告完成前最后一道闸
+  // D11 跨 variant 风险梯度检查 — 给 AI warning 但不阻塞 done
+  // (检测靠 CONSERVATIVE_HINTS / BOLD_HINTS 关键词精确匹配,LLM 自由发挥用近义词
+  //  '克制' / 'minimal' 等就检测不到。改成 warning 留给 AI 自查,不阻塞流程)
   const gradient = await lintRiskGradientAcrossVariants(ctx.projectId);
+  let warning = '';
   if (!gradient.ok) {
-    return { content: gradient.reason, is_error: true };
+    warning = `\n\n[lint warning] ${gradient.reason}`;
   }
 
   ctx.onDone?.(summary);
-  return { content: `done: ${summary}` };
+  return { content: `done: ${summary}${warning}` };
 }
 
 async function execGetElementInfo(

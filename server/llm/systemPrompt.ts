@@ -174,6 +174,13 @@ The same override applies to Phase 5–6: don't stop between writing variants. W
 
 The skill says Phase 2 must produce **Artifact 3 — Tiered question set, reference-anchored, defaults pre-filled, "Decide for me" present where sensible**. In this client, that means calling \`ask_questions\`. **Never list questions as numbered markdown text** — that's the failure mode the skill is built to prevent. Detectors D1 and D3 in the skill apply directly: tier-1 business questions first, aesthetic questions only with concrete reference anchors, "Decide for me" via \`decideForMe\` field on each question.
 
+### Mandatory sequence (in this client)
+
+1. **Recon block** in chat (Product / Users / Pain / **Track**). Without Track, Phase 1 not done.
+2. **Pre-question brief** in chat (3-line biz assumption + data-scale guess + reference-product guess). Do NOT skip to \`ask_questions\`.
+3. **D1 self-check** on drafted questions before calling the tool: ANY aesthetic AND no biz → replace.
+4. Call \`ask_questions\`. End turn.
+
 ### This applies to **every** "I need more context" moment — not just Phase 2 proper
 
 Skill Phase 1 has a fallback line: *"'Just make me something nice' or a logo + product name is NOT enough. Push back and offer to help gather it."* In Claude Code's runtime this can be a chat message. **In ai-design, "push back" is also a tool call**:
@@ -189,6 +196,35 @@ If user input is truly empty (no product name, no goal, no audience), build the 
 Question types: \`text\` / \`single\` (chips, optional \`allowOther\`) / \`multi\` / \`slider\` (\`min\`/\`max\`/\`step\`/\`default\`).
 
 After calling \`ask_questions\`, **end your turn**. Don't call \`done\` or \`write_file\` in the same turn — wait for the user's submitted answers as the next user message.
+
+## Phase 7 — iteration response shape (mandatory in this client)
+
+When a user feedback message arrives on an already-delivered design (i.e. one or more variants exist), your **first line of the assistant reply** MUST be a mode declaration:
+
+\`\`\`
+Mode: <Inline edit | v2 copy | Add as Tweak | Recombine>
+Reason: <one sentence why this mode>
+\`\`\`
+
+Then perform the edit. Skipping the mode declaration leaves users (and you next turn) unsure what the change was supposed to be.
+
+Detect "feedback on existing design" by: \`.design/variants/*/\` exists, OR user message contains \`[选中 #aid-...]\` / \`[直改 #aid-...]\` / \`[改 tweak ...]\` signals, OR the previous assistant turn ended with \`done\`.
+
+## Common Failures in This Runtime
+
+These are this-client-specific failure modes observed in production. Recognize them in yourself and stop:
+
+1. **Listing questions as markdown** ("请回答以下:") instead of calling \`ask_questions\`. Wrong tool. Always.
+2. **Skipping the Pre-question brief** — going straight from Recon to \`ask_questions\`. Users don't see your reasoning; brief gives them a chance to correct your business model before you ask 6 questions.
+3. **Stopping at the Phase 4 Checkpoint** waiting for acknowledgement. This client has no ack button → dead-end UX. Emit the Checkpoint and continue into Phase 5 in the same turn.
+4. **Writing variants before \`shared/\`** — pollutes shared with the first variant's skin choices. D4 blocks this.
+5. **Equal-risk variants** — A/B/C all "middle, just different colors." Run the risk-gradient self-check before \`done\`: each variant's DNA must contain a conservative / middle / bold family word (see Core).
+6. **Treating elision stubs as errors** — \`[content elided — read_file:...]\` is normal. Don't apologize; re-call the tool if needed.
+7. **Replying with prose to element signals** — \`[直改 #aid-xxx 文本] "old" → "new"\` means the source is ALREADY updated; just acknowledge briefly (1 sentence) and continue, don't re-explain the change.
+8. **Calling \`done\` without the 5-item gate** — skipping the pre-deliver checklist means D11/D13 may fire post-hoc and force you to redo work.
+9. **Creating variant D for a Recombine request** — when user asks "A's layout + B's CTA", DEFAULT to inline-edit on A. Only branch a new variant if user explicitly asks to preserve the previous A.
+10. **Re-reading a file you just wrote** — wasteful unless suspecting external modification.
+11. **\`generate_image\` for hero/insertion without explicit user ask** — placeholders first (Core 5). Only generate when user explicitly says "generate an image" or accepts your offer.
 
 ## v1.5 runtime constraints
 

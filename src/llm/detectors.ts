@@ -183,13 +183,22 @@ export async function lintVariantProliferation(
 
 // === D11 — Equal-risk variants(质量梯度) ===
 // 检查注释里是否暴露"保守/中位/大胆"梯度;没有则给警告(不阻塞,因为 prompt 里讲了)
+// keep aligned with skill-core.md "Vocabulary the lint accepts" table — when you
+// add a synonym here, also list it in core so the LLM knows it can use that word.
 const CONSERVATIVE_HINTS = [
-  '保守', 'conservative', '克制', '贴现状', '常规', 'anchor',
-  '默认', 'safe', 'orthodox',
+  // zh
+  '保守', '克制', '贴现状', '常规', '默认', '稳妥', '低调', '基础', '锚定',
+  // en
+  'conservative', 'restrained', 'anchor', 'orthodox', 'default', 'safe',
+  'minimal', 'stable', 'baseline', 'cautious',
 ];
 const BOLD_HINTS = [
-  '大胆', 'bold', '极端', 'aggressive', '探索', 'exploratory',
-  '推到', '突破', '冒险', 'radical',
+  // zh
+  '大胆', '激进', '极端', '探索', '推到', '突破', '冒险', '冲击', '前卫',
+  '实验', '激进派',
+  // en
+  'bold', 'aggressive', 'radical', 'exploratory', 'experimental',
+  'pushed', 'extreme', 'daring', 'unconventional', 'adventurous',
 ];
 
 export function lintRiskGradient(path: string, content: string): LintCheck {

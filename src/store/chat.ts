@@ -514,6 +514,26 @@ export class ChatController {
           break;
         }
 
+        // 上游网关偶发空响应(rate-limit / model 异常 / 截断)→ end_turn 但 blocks=0,
+        // 用户看到 AI "没说话就结束"。给一条明显错误提示,不要静默吞掉。
+        if (
+          resp.blocks.length === 0 &&
+          resp.stopReason !== 'tool_use' &&
+          resp.stopReason !== 'max_tokens'
+        ) {
+          await this.updateMessage(pendingAssistantId, {
+            blocks: [
+              {
+                type: 'text',
+                text:
+                  '⚠ 上游返回空响应(可能是模型限流、网关异常或当前 model 输出被过滤)。' +
+                  '重试一次,或者去设置面板换一个 model / provider。',
+              },
+            ],
+          });
+          break;
+        }
+
         // 用 final blocks 覆盖 streaming buffer(authoritative)
         await this.updateMessage(pendingAssistantId, { blocks: resp.blocks });
         this.streamingBlocks = resp.blocks;
@@ -913,7 +933,12 @@ function formatPinnedAsBrief(pinned: ChatMessage[]): string {
 
 function isAbortErr(e: unknown): boolean {
   if (e instanceof DOMException && e.name === 'AbortError') return true;
-  if (e && typeof e === 'object' && 'name' in e && (e as any).name === 'AbortError')
-    return true;
+  if (e && typeof e === 'object') {
+    const obj = e as any;
+    if (obj.name === 'AbortError') return true;
+    // Anthropic / OpenAI SDK abort 时抛的普通 Error,name 通常是 'APIError' / 'Error',
+    // 靠 message 字符串识别 — 'Request was aborted' / 'aborted by user' / 'AbortError'
+    if (typeof obj.message === 'string' && /aborted|abort error/i.test(obj.message)) return true;
+  }
   return false;
 }

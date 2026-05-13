@@ -75,9 +75,11 @@ export function execServerTool(
         isError: true,
       };
     }
+    // 包一个明显的 "Loaded" prefix,让 LLM 知道这是新 context 不是历史,
+    // 同时让 placeholder 在 client UI 也明确显示加载了哪个章节
     return {
-      realContent: body,
-      placeholderContent: `[read_skill section="${section}" loaded server-side]`,
+      realContent: `✓ Loaded skill chapter: "${section}"\n\n---\n\n${body}`,
+      placeholderContent: `[✓ read_skill loaded "${section}" — ${body.length.toLocaleString()} chars, server-side]`,
     };
   }
   return {

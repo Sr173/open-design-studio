@@ -99,21 +99,47 @@ export class OpenAIProvider implements LLMProvider {
     if (textAccum) blocks.push({ type: 'text', text: textAccum });
     for (const entry of toolCallMap.values()) {
       let parsed: unknown = {};
+      let split: unknown[] | null = null;
       try {
         parsed = entry.argsBuffer ? JSON.parse(entry.argsBuffer) : {};
       } catch {
-        parsed = { __parseError: true, raw: entry.argsBuffer };
+        // 网关 / 模型 bug 兜底:有些上游(如某 Gemini 套 OpenAI 协议的网关)把
+        // 多个 tool_call 拼成一个 args 串,变成 `{"path":"a"}{"path":"b"}`。
+        // 试着按顶层 brace 平衡拆开,如果每段都是合法 JSON 就当多个独立 tool_use。
+        split = trySplitConcatenatedJSON(entry.argsBuffer);
+        if (!split) {
+          parsed = { __parseError: true, raw: entry.argsBuffer };
+        }
       }
-      blocks.push({
-        type: 'tool_use',
-        id: entry.id,
-        name: entry.name,
-        input: parsed,
-      });
+      if (split && split.length > 0) {
+        console.warn(
+          `[openai] tool_call ${entry.name} 收到 ${split.length} 个拼接 JSON,自动拆成多个 tool_use`,
+        );
+        for (let i = 0; i < split.length; i++) {
+          blocks.push({
+            type: 'tool_use',
+            id: i === 0 ? entry.id : `${entry.id}-${i}`,
+            name: entry.name,
+            input: split[i],
+          });
+        }
+      } else {
+        blocks.push({
+          type: 'tool_use',
+          id: entry.id,
+          name: entry.name,
+          input: parsed,
+        });
+      }
     }
 
+    // 兜底:有些网关(尤其是套了 anthropic/gemini 模型的 OpenAI-compat 网关)
+    // 在 message 里 emit 了 tool_calls 但 finish_reason 报 'stop' 而不是 'tool_calls'。
+    // 客户端按 mapFinishReason 看成 end_turn → 不跑工具循环 → orphan tool_use。
+    // 修复:blocks 里只要有 tool_use,强制 stopReason = 'tool_use'(信现实不信上游 label)。
+    const hasToolUse = blocks.some((b) => b.type === 'tool_use');
     return {
-      stopReason: mapFinishReason(finishReason),
+      stopReason: hasToolUse ? 'tool_use' : mapFinishReason(finishReason),
       blocks,
     };
   }
@@ -199,5 +225,46 @@ function mapFinishReason(r: string | null): StopReason {
       return 'max_tokens';
     default:
       return 'unknown';
+  }
+}
+
+/** 尝试把 `{"a":1}{"b":2}` 这种拼接 JSON 用顶层 brace 平衡切开。
+ *  每段都得是合法 JSON 才返回数组,否则返回 null(降级回 __parseError)。
+ *  忽略字符串内部的 { } (引号 / 转义状态机)。 */
+function trySplitConcatenatedJSON(raw: string): unknown[] | null {
+  const s = raw.trim();
+  if (!s || !s.includes('}{')) return null;
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (escaped) { escaped = false; continue; }
+    if (inString) {
+      if (c === '\\') escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) {
+        parts.push(s.slice(start, i + 1));
+        // skip whitespace between objects
+        let j = i + 1;
+        while (j < s.length && /\s/.test(s[j])) j++;
+        start = j;
+        i = j - 1;
+      }
+    }
+  }
+  if (parts.length < 2 || start < s.length) return null; // 收尾不干净
+  try {
+    return parts.map((p) => JSON.parse(p));
+  } catch {
+    return null;
   }
 }
