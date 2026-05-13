@@ -49,6 +49,13 @@ export function ModelSettings({ open, onClose }: ModelSettingsProps) {
   const [tab, setTab] = useState<Tab>('profile');
   const [refreshTick, setRefreshTick] = useState(0);
 
+  // 保存 / 激活成功后 → refresh + 延迟 1s 关闭对话框
+  // (留时间让用户看到 ✓ 成功提示)
+  function closeAfterSave() {
+    setRefreshTick((v) => v + 1);
+    setTimeout(() => onClose(), 1000);
+  }
+
   useEffect(() => {
     if (!open) return;
     setLoading(true);
@@ -111,21 +118,21 @@ export function ModelSettings({ open, onClose }: ModelSettingsProps) {
         {!loading && cfg && isElectron() && tab === 'profile' && (
           <ElectronEditor
             current={cfg}
-            onSaved={() => setRefreshTick((v) => v + 1)}
+            onSaved={closeAfterSave}
           />
         )}
 
         {!loading && cfg && isElectron() && tab === 'oauth' && (
-          <OAuthPanel />
+          <OAuthPanel onSaved={closeAfterSave} />
         )}
 
         {!loading && cfg && isElectron() && tab === 'image' && (
-          <ImageProviderPanel onSaved={() => setRefreshTick((v) => v + 1)} />
+          <ImageProviderPanel onSaved={closeAfterSave} />
         )}
 
         {!loading && cfg && isElectron() && tab === 'profiles' && (
           <ProfilesManager
-            onActivated={() => setRefreshTick((v) => v + 1)}
+            onActivated={closeAfterSave}
           />
         )}
 
@@ -433,7 +440,7 @@ function ElectronEditor({
 // OAuthPanel — Sprint J 订阅账号登录 (Anthropic Console / OpenAI Codex)
 // ============================================================
 
-function OAuthPanel() {
+function OAuthPanel({ onSaved }: { onSaved?: () => void } = {}) {
   const [st, setSt] = useState<{ anthropic: boolean; openai: boolean }>({ anthropic: false, openai: false });
   const [busy, setBusy] = useState<'anthropic' | 'openai' | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -499,6 +506,7 @@ function OAuthPanel() {
       const model = (provider === 'anthropic' ? models.anthropic : models.openai) || preset.models[0];
       await applyProfile(provider, model);
       setMsg('✓ 登录成功 & 已激活');
+      onSaved?.();
     } catch (e: any) {
       setErr(e?.message ?? String(e));
     } finally {
@@ -514,6 +522,7 @@ function OAuthPanel() {
     try {
       await applyProfile(provider, model);
       setMsg(`✓ 已切到 ${model}`);
+      onSaved?.();
     } catch (e: any) {
       setErr(e?.message ?? String(e));
     }

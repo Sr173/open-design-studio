@@ -487,9 +487,15 @@ export class ChatController {
         } catch (err) {
           if (isAbortErr(err)) {
             interruptedByAbort = true;
-            // 标记当前 streaming message 为中断,保存已 stream 的 blocks
+            // **关键**:剥掉所有 orphan tool_use(没机会执行),只保留 text。
+            // 不剥的话,下次提交 history 给 Anthropic 会因孤儿 tool_use 报 400。
+            const cleaned = this.streamingBlocks.filter(
+              (b) => b.type !== 'tool_use'
+            );
             await this.updateMessage(pendingAssistantId, {
-              blocks: this.streamingBlocks,
+              blocks: cleaned.length
+                ? cleaned
+                : [{ type: 'text', text: '[中断 — AI 当时在调工具,内容已丢弃]' }],
               interrupted: true,
             });
             break;

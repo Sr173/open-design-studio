@@ -562,6 +562,23 @@ export async function executeTool(
   if (ctx.signal.aborted) {
     throw new DOMException('Aborted', 'AbortError');
   }
+  // 上游模型偶尔 emit 不合法 JSON args(常见:连发两个 JSON 拼成
+  // `{"path":"a"}{"path":"b"}`,或漏闭合)。openai.ts 把这种存成
+  // { __parseError: true, raw: '...' }。给 LLM 一个清晰指引让它重试,
+  // 不要让具体 tool 跑下去报 "path 不能为空" 之类含糊错误。
+  if (input && typeof input === 'object' && (input as any).__parseError) {
+    const raw = String((input as any).raw ?? '').slice(0, 200);
+    return {
+      content:
+        `tool args JSON parse 失败 — 收到的 args 不是合法 JSON。\n` +
+        `raw 字符串: ${raw}\n\n` +
+        `常见原因:你想一次调多个工具但只 emit 了一个 tool_call,把多个 JSON 拼在了一起。` +
+        `正确做法:**一次只调一个工具**,args 必须是一个合法 JSON 对象;` +
+        `多个调用 emit 多个独立的 tool_call(各自 args 是独立 JSON)。` +
+        `请重新调用此工具,args 写成合法 JSON。`,
+      is_error: true,
+    };
+  }
   switch (name) {
     case 'write_file':
       return execWriteFile(input, ctx);
