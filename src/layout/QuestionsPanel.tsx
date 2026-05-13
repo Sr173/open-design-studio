@@ -391,7 +391,7 @@ function ChipGroup({
   onSelect,
   onOtherChange,
 }: {
-  options: { label: string; value: string; selected: boolean }[];
+  options: { label: string; value: string; selected: boolean; svg?: string }[];
   multi?: boolean;
   allowOther?: boolean;
   otherSelected?: boolean;
@@ -399,6 +399,44 @@ function ChipGroup({
   onSelect: (v: string) => void;
   onOtherChange?: (v: string) => void;
 }) {
+  // 一组选项任一含 svg → 视觉网格(2 列 mini wireframe);否则 chip 行
+  const hasSvg = options.some((o) => o.svg && o.svg.includes('<svg'));
+  if (hasSvg) {
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 10 }}>
+        {options.map((o) => (
+          <SvgOption
+            key={o.value}
+            label={o.label}
+            svg={o.svg ?? ''}
+            selected={o.selected}
+            onClick={() => onSelect(o.value)}
+          />
+        ))}
+        {allowOther && (
+          <div>
+            <Chip selected={!!otherSelected} onClick={() => {}}>Other</Chip>
+            <input
+              type="text"
+              placeholder="Other..."
+              value={otherValue ?? ''}
+              onChange={(e) => onOtherChange?.(e.target.value)}
+              style={{
+                marginTop: 6,
+                padding: '6px 10px',
+                width: '100%',
+                borderRadius: 6,
+                border: '1px solid rgba(0,0,0,0.12)',
+                background: 'transparent',
+                fontSize: 13,
+                color: '#1a1614',
+              }}
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
       {options.map((o) => (
@@ -493,3 +531,44 @@ const btnSecondary: React.CSSProperties = {
   border: '1px solid rgba(0,0,0,0.12)',
   fontSize: 13,
 };
+
+function SvgOption({
+  label, svg, selected, onClick,
+}: { label: string; svg: string; selected: boolean; onClick(): void }) {
+  // 安全:strip <script>;LLM 应不发但保险
+  const safeSvg = svg.replace(/<script[\s\S]*?<\/script>/gi, '');
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        padding: 8,
+        borderRadius: 8,
+        background: selected ? 'rgba(255,164,81,0.14)' : 'transparent',
+        border: selected ? '2px solid var(--accent)' : '1px solid rgba(0,0,0,0.12)',
+        cursor: 'pointer',
+        textAlign: 'center',
+        color: '#1a1614',
+      }}
+    >
+      <div
+        style={{
+          width: '100%',
+          aspectRatio: '80 / 56',
+          background: 'rgba(0,0,0,0.04)',
+          borderRadius: 4,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          overflow: 'hidden',
+        }}
+        // SVG 已经 strip script;来源是服务端 system prompt 控制的 AI 输出
+        dangerouslySetInnerHTML={{ __html: safeSvg }}
+      />
+      <span style={{ fontSize: 12, fontWeight: selected ? 600 : 400 }}>{label}</span>
+    </button>
+  );
+}

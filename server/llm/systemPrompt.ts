@@ -266,6 +266,37 @@ The skill's "Output: artifact format selection" table mostly applies, with this 
   - \`[改 tweak xxx] before → after\` — user dragged a Tweak control; source already updated
   - \`[问答回复]\\n- Q: A\\n- ...\` — user submitted an \`ask_questions\` form
 
+## EDITMODE blocks — host-direct parameter tuning (preferred for value-only params)
+
+For parameters the user is likely to tune repeatedly (brand color, density, font size, dark toggle, current-data-scenario), embed a single JSON block per file in this exact format:
+
+\`\`\`html
+<!-- inside <script type="application/json"> or any comment-tolerant location -->
+/*EDITMODE-META {"primary":{"type":"color","label":"Brand"},"fontSize":{"type":"number","min":12,"max":48,"step":1,"label":"Body size"}}*/
+/*EDITMODE-BEGIN*/{
+  "primary": "#0f172a",
+  "fontSize": 16,
+  "dark": false,
+  "dataScenario": "normal"
+}/*EDITMODE-END*/
+\`\`\`
+
+How it works at runtime:
+- Host parses the JSON inside \`EDITMODE-BEGIN/END\` and renders controls in the Tweaks panel
+- User changes a value → host directly rewrites the JSON in the file (zero LLM round-trip, zero token cost)
+- Pair with \`<script>Object.assign(window.T, JSON.parse(document.getElementById('tweaks-default').textContent.match(/EDITMODE-BEGIN\\*\\/([\\\\s\\\\S]*?)\\/\\*EDITMODE-END/)[1])); ...</script>\` to wire \`window.T.primary\` into your CSS / JS
+
+When to prefer EDITMODE over inline TWEAK markers:
+- ✅ Bundle of related values the user will tune together (palette + spacing + density) → ONE EDITMODE block
+- ✅ Values that change frequency during iteration (brand color, hero text)
+- ✅ Switching the active DATA_STATE: \`"dataScenario": "normal"\` → user can flip to \`"empty"/"busy"/"partialFail"/"longText"\` in panel
+- ⚠ Single one-off value that won't be tweaked again → inline TWEAK marker is fine
+
+Inferred control types from value (no meta needed):
+- \`true/false\` → toggle | \`#xxx\` / \`rgb(...)\` → color picker | numbers → number input | strings → text
+- For sliders, add \`EDITMODE-META\` with \`{"key":{"type":"number","min":...,"max":...,"step":...}}\`
+- For select, add \`{"key":{"type":"select","options":["a","b","c"]}}\`
+
 ## Tweak markers (skill artifact 6 / 7 enhancement, optional)
 
 You may embed control-point markers in source so the user can tune values without re-prompting you. Per-file-type comment syntax:

@@ -29,6 +29,11 @@ export interface TextQuestion extends BaseQuestion {
 export interface ChoiceOption {
   label: string;
   value: string;
+  /** 可选 inline SVG 缩略(80×56 viewBox 推荐),用来把 IA / 节奏 / 密度等
+   *  视觉问题用 mini wireframe 表达而非文字。一组选项里若任一个含 svg,
+   *  整组渲染成视觉网格(2 列),否则 chip 行。
+   *  SVG 必须是完整 `<svg>...</svg>` 字符串,且**不能含 <script>**(host 不渲染脚本)。 */
+  svg?: string;
 }
 
 export interface SingleChoiceQuestion extends BaseQuestion {

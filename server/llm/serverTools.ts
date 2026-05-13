@@ -10,8 +10,29 @@
 
 import type { Block, ChatToolDef } from './types.js';
 import { readSkillSection, listSkillSections } from '../skill-chapters.js';
+import { listStarters, readStarter } from '../starters/index.js';
 
 export const SERVER_TOOLS: ChatToolDef[] = [
+  {
+    name: 'read_starter',
+    description:
+      'Read a pre-built scaffolding file ("starter"). Use this for artifact formats that need standardized infrastructure rather than written from scratch:\n' +
+      '\n' +
+      'Available starters:\n' +
+      '  - "device-frame" — phone/tablet shell with status bar + keyboard placeholder (iPhone 14 / Pixel 8 / iPad pixel-accurate). Use when designing mobile app screens.\n' +
+      '  - "deck-stage" — slide deck infra (auto-fit 1280×720, keyboard nav, fullscreen, print-to-PDF, speaker notes). Use for pitch decks / presentations.\n' +
+      '  - "image-slot" — drag-and-drop image placeholder web component. Use for hero / logo / avatar slots that need user-fed images.\n' +
+      '\n' +
+      'Call with `{ name: "device-frame" | "deck-stage" | "image-slot" }`. Returns the file body + suggested in-project path. Then call `write_file(path, content)` to copy it into the project. Don\'t re-implement these — the starters embed accumulated bug-fixes (correct device dimensions, print-CSS quirks, etc.).\n' +
+      '\n' +
+      'Call with no arg (or `{}`) to list available starters with descriptions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'starter name (omit to list)' },
+      },
+    },
+  },
   {
     name: 'read_skill',
     description:
@@ -57,6 +78,43 @@ export function execServerTool(
   name: string,
   input: unknown
 ): ServerToolExec {
+  if (name === 'read_starter') {
+    const reqName = String((input as any)?.name ?? '').trim();
+    if (!reqName) {
+      // List mode
+      const list = listStarters();
+      const body =
+        '# Available starters\n\n' +
+        list
+          .map(
+            (s) =>
+              `## ${s.name}\n${s.description}\n\n**Use cases**:\n${s.useCases.map((u) => `- ${u}`).join('\n')}\n\n**Suggested path**: \`${s.suggestedPath}\``,
+          )
+          .join('\n\n---\n\n');
+      return {
+        realContent: body,
+        placeholderContent: `[read_starter listed ${list.length} starters, server-side]`,
+      };
+    }
+    const found = readStarter(reqName);
+    if (!found) {
+      return {
+        realContent: `unknown starter "${reqName}". Available: ${listStarters().map((s) => s.name).join(', ')}`,
+        placeholderContent: `[read_starter: 未知 starter "${reqName}"]`,
+        isError: true,
+      };
+    }
+    const realContent =
+      `✓ Loaded starter: "${found.entry.name}"\n` +
+      `Description: ${found.entry.description}\n` +
+      `Suggested in-project path: ${found.entry.suggestedPath}\n` +
+      `\n---\n\n${found.body}\n\n---\n\n` +
+      `Next step: call write_file with path="${found.entry.suggestedPath}" and content = the file body above (between the --- markers).`;
+    return {
+      realContent,
+      placeholderContent: `[✓ read_starter loaded "${found.entry.name}" — ${found.body.length.toLocaleString()} chars, server-side]`,
+    };
+  }
   if (name === 'read_skill') {
     const section = String((input as any)?.section ?? '').trim();
     if (!section) {

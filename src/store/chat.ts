@@ -14,7 +14,7 @@ import { nanoid } from 'nanoid';
 import { startCapture, commitCapture } from './snapshots';
 import { getRecentErrors, clearErrors } from '../preview/sandboxBridge';
 import { maybeSummarize } from '../llm/contextManager';
-import { ALL_TOOLS, executeTool, type ToolExecCtx } from '../llm/tools';
+import { ALL_TOOLS, executeToolWithLint, type ToolExecCtx } from '../llm/tools';
 import {
   type QuestionSet,
   type QuestionAnswers,
@@ -23,6 +23,7 @@ import {
 } from '../llm/questions';
 import { tryParseAskQuestionsPartial } from '../llm/streamingParse';
 import { loadPinnedMessages } from './pinned';
+import { readReviewState, formatReviewStateForContext } from './reviewState';
 import { touchChat, getChatTask } from './chats';
 import { getProjectBrief } from './projects';
 import { formatProjectBrief, formatTaskBrief } from './briefs';
@@ -357,6 +358,15 @@ export class ChatController {
       if (pinnedText) briefSections.push(pinnedText);
     }
 
+    // (d) 变体审核状态(用户在 VariantBar 上点 🟢/🟡/🔴 写入 .review.json,
+    //     这里注入 LLM context,让 Phase 7 的 mode 选择基于确定性 signal,
+    //     不用靠关键词识别"我选 B"还是"B 不错"。)
+    try {
+      const review = await readReviewState(this.projectId);
+      const reviewText = formatReviewStateForContext(review);
+      if (reviewText) briefSections.push(reviewText);
+    } catch { /* silently skip */ }
+
     if (briefSections.length > 0) {
       out.push({
         role: 'user',
@@ -610,7 +620,7 @@ export class ChatController {
             }
             let result;
             try {
-              result = await executeTool(t.name, t.input, callCtx);
+              result = await executeToolWithLint(t.name, t.input, callCtx);
             } catch (e) {
               if (isAbortErr(e)) throw e;
               result = {

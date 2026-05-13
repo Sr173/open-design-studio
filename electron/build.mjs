@@ -24,11 +24,17 @@ const MD_ASSETS = [
   ['server/skill.md', 'skill.md'],
   ['server/skill-core.md', 'skill-core.md'],
   ['public/__aid_inject.js', '__aid_inject.js'],
+  // starters — server/starters/index.ts 用 path.join(__dirname, 'starters') 兜底找它们
+  ['server/starters/device-frame.html', 'starters/device-frame.html'],
+  ['server/starters/deck-stage.js', 'starters/deck-stage.js'],
+  ['server/starters/image-slot.js', 'starters/image-slot.js'],
 ];
 function copyAssets() {
   mkdirSync(outDir, { recursive: true });
   for (const [src, dest] of MD_ASSETS) {
-    copyFileSync(path.join(rootDir, src), path.join(outDir, dest));
+    const destPath = path.join(outDir, dest);
+    mkdirSync(path.dirname(destPath), { recursive: true });
+    copyFileSync(path.join(rootDir, src), destPath);
   }
   console.log('[electron-build] assets copied');
 }

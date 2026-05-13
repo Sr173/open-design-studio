@@ -10,6 +10,11 @@ import { useEffect, useState } from 'react';
 import type { ChatController } from '../store/chat';
 import { detectVariants, type VariantInfo } from '../preview/variants';
 import { listFiles } from '../store/files';
+import {
+  readReviewState,
+  setReviewStatus,
+  type ReviewStatus,
+} from '../store/reviewState';
 
 export interface VariantBarProps {
   controller: ChatController;
@@ -21,13 +26,18 @@ export function VariantBar({ controller, activeSlug, onSelect }: VariantBarProps
   const [variants, setVariants] = useState<VariantInfo[]>([]);
   const [sizes, setSizes] = useState<Map<string, number>>(new Map());
   const [mtimes, setMtimes] = useState<Map<string, number>>(new Map());
+  const [review, setReview] = useState<Record<string, ReviewStatus>>({});
 
   useEffect(() => {
     let alive = true;
     async function refresh() {
-      const files = await listFiles(controller.projectId).catch(() => []);
+      const [files, rs] = await Promise.all([
+        listFiles(controller.projectId).catch(() => []),
+        readReviewState(controller.projectId).catch(() => ({ variants: {} } as any)),
+      ]);
       if (!alive) return;
       setVariants(detectVariants(files));
+      setReview(rs.variants ?? {});
       const s = new Map<string, number>();
       const m = new Map<string, number>();
       for (const f of files) {
@@ -44,6 +54,22 @@ export function VariantBar({ controller, activeSlug, onSelect }: VariantBarProps
       clearInterval(t);
     };
   }, [controller.projectId]);
+
+  async function cycleStatus(slug: string) {
+    // null → approved → needs-changes → rejected → null
+    const cur = review[slug];
+    const next: ReviewStatus | null =
+      cur === undefined ? 'approved'
+        : cur === 'approved' ? 'needs-changes'
+          : cur === 'needs-changes' ? 'rejected'
+            : null;
+    await setReviewStatus(controller.projectId, slug, next);
+    setReview((r) => {
+      const cp = { ...r };
+      if (next === null) delete cp[slug]; else cp[slug] = next;
+      return cp;
+    });
+  }
 
   if (variants.length === 0) {
     return null;
@@ -83,9 +109,43 @@ export function VariantBar({ controller, activeSlug, onSelect }: VariantBarProps
         const risk = i === 0 ? '保守' : i === variants.length - 1 ? '大胆' : '中位';
         const size = sizes.get(v.path) ?? 0;
         const mtime = mtimes.get(v.path) ?? 0;
+        const status = review[v.slug];
+        const statusSym =
+          status === 'approved' ? '🟢'
+            : status === 'needs-changes' ? '🟡'
+              : status === 'rejected' ? '🔴'
+                : '';
+        const statusTitle =
+          status === 'approved' ? '已选(approved)— 后续编辑默认 scope 到这个变体'
+            : status === 'needs-changes' ? '需要改(needs-changes)— agent 会知道这个状态'
+              : status === 'rejected' ? '弃用(rejected)'
+                : '点 ⚪ 按钮循环切换:🟢 选这个 → 🟡 改改 → 🔴 弃 → 清空';
         return (
-          <button
+          <div
             key={v.slug}
+            style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
+          >
+          <button
+            onClick={(e) => { e.stopPropagation(); cycleStatus(v.slug); }}
+            title={statusTitle}
+            style={{
+              width: 22,
+              height: 22,
+              borderRadius: 4,
+              border: '1px solid var(--border-subtle)',
+              background: status ? 'transparent' : 'var(--bg-panel)',
+              cursor: 'pointer',
+              fontSize: 14,
+              padding: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            {statusSym || <span style={{ color: 'var(--text-disabled)', fontSize: 11 }}>⚪</span>}
+          </button>
+          <button
             onClick={() => onSelect(v.slug)}
             title={[
               v.dna && `DNA: ${v.dna}`,
@@ -142,6 +202,7 @@ export function VariantBar({ controller, activeSlug, onSelect }: VariantBarProps
               </span>
             </div>
           </button>
+          </div>
         );
       })}
 

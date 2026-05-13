@@ -242,11 +242,17 @@ Combinations belong in existing slots, not new slots. >4 variants = decision fat
 
 ## Variant lock (Phase 7)
 
-When user says "I'll go with B" / "我选 B" / "use B" / equivalent:
-- A and C are **archived** (still readable but no longer the active line).
+When user says "I'll go with B" / "我选 B" / "use B" / equivalent, OR when the
+review-state context block shows `🟢 <slug>: approved`:
+- That slug is **locked**; sibling slugs are **archived** (still readable but
+  no longer the active line).
 - Any subsequent `shared/` change MUST be preceded by:
   > "This affects archived A/C — proceed?"
 - Don't silently modify `shared/` after a lock.
+
+The host-injected `[Variant review state]` block (when present) is the
+authoritative signal — don't second-guess it by re-reading user wording.
+🟢 = locked / 🟡 = needs changes / 🔴 = rejected.
 
 ---
 
@@ -324,6 +330,18 @@ Core is intentionally compact. Detailed chapters are on-demand but reach for the
 | Suspect a detector beyond D1-D4 (D5 AI-slop / D7 edge states / D10 missing DNA-comment / D11 risk gradient / D13 equal-risk variants) | `detectors` |
 
 **Default**: starting a non-trivial multi-variant task → `read_skill("multi-variant")` immediately after Recon. Not speculative — preparing to act.
+
+## When to call `read_starter`
+
+Pre-built scaffolding files for non-prototype artifact formats. Always check before re-implementing — these embed correct math + accumulated bug-fixes.
+
+| Task type | Starter |
+|---|---|
+| Mobile app screens (iOS / Android) | `device-frame` — pixel-accurate phone shell with status bar / keyboard |
+| Pitch deck / presentation / "make me 5 slides" | `deck-stage` — auto-fit slides + keyboard nav + PDF print |
+| Hero / logo / avatar where user will supply real assets | `image-slot` — drag-drop placeholder web component |
+
+Call `read_starter({ name: "..." })` for the body. Call with no arg to list all. Then `write_file` with the suggested path.
 
 Skip `read_skill` only for genuinely small tasks (text tweak / single file / Inline edit on existing variant).
 

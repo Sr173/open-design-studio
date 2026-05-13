@@ -30,6 +30,12 @@ import {
   lintVariantProliferation,
   lintRiskGradientAcrossVariants,
 } from './detectors';
+import { lintDesign, formatLintReport } from './designLint';
+
+// 写入类工具完成后会自动跑 cross-file design-lint,把 issues 挂到 tool_result.content
+// 末尾让 LLM 看到。lint 是 warning 级(不会 is_error),但显式让 LLM 知道:
+// 不在 done() 之前修干净,Phase 8 5-item gate 过不了。
+const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch']);
 
 export interface ToolExecCtx {
   projectId: number;
@@ -103,10 +109,19 @@ export const QUESTION_TOOLS: ChatToolDef[] = [
                   properties: {
                     label: { type: 'string' },
                     value: { type: 'string' },
+                    svg: {
+                      type: 'string',
+                      description:
+                        '可选 inline SVG 缩略(80×56 viewBox 推荐)。一组选项里**任一**含 svg → 整组渲染成 2 列视觉网格而非文字 chip。' +
+                        '把"哪种 IA / 哪种节奏 / 哪种密度"这种本质是视觉的问题用 mini wireframe 表达,远比文字精确。' +
+                        '完整 `<svg viewBox="0 0 80 56">...</svg>` 字符串,**不要含 <script>**(host 会 strip)。' +
+                        '推荐用 fill="currentColor" / stroke="currentColor" 让缩略适应 panel 主题。',
+                    },
                   },
                   required: ['label', 'value'],
                 },
-                description: 'single/multi 选项',
+                description:
+                  'single/multi 选项。视觉问题(IA / 节奏 / 密度 / 焦点)优先用 svg 字段渲染缩略,文字说不清的去文字化。',
               },
               allowOther: {
                 type: 'boolean',
@@ -618,6 +633,26 @@ export async function executeTool(
         is_error: true,
       };
   }
+}
+
+/** Wrapper: 写入类工具完成后跑 design-lint,把报告挂到 content 末尾 */
+const dispatchInner = executeTool;
+export async function executeToolWithLint(
+  name: string,
+  input: any,
+  ctx: ToolExecCtx,
+): Promise<ToolResult> {
+  const result = await dispatchInner(name, input, ctx);
+  if (MUTATING_TOOLS.has(name) && !result.is_error) {
+    try {
+      const report = await lintDesign(ctx.projectId);
+      return { ...result, content: result.content + formatLintReport(report) };
+    } catch (e) {
+      // lint 本身崩了别影响主流程
+      console.warn('[design-lint] failed:', (e as Error).message);
+    }
+  }
+  return result;
 }
 
 async function execWriteFile(
@@ -1330,7 +1365,17 @@ async function execAskQuestions(
       const options = Array.isArray(q.options)
         ? q.options
             .filter((o: any) => o && o.label && o.value != null)
-            .map((o: any) => ({ label: String(o.label), value: String(o.value) }))
+            .map((o: any) => {
+              const opt: { label: string; value: string; svg?: string } = {
+                label: String(o.label),
+                value: String(o.value),
+              };
+              // svg 字段(可选)— host 端会自动 strip <script>
+              if (typeof o.svg === 'string' && o.svg.includes('<svg')) {
+                opt.svg = o.svg;
+              }
+              return opt;
+            })
         : [];
       if (options.length === 0) continue;
       questions.push({

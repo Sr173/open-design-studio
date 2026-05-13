@@ -1,0 +1,129 @@
+<!-- device-frame starter — phone / tablet shell + status bar + keyboard
+     Usage: <iframe src="..."> with class "device-iphone" / "device-android" inside
+     Drop into shared/ or a variant; the variant index.html just embeds an iframe.
+     Math is correct for iPhone 14 (390×844) and Pixel 8 (412×915). -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Device Frame</title>
+<style>
+  :root {
+    --frame-bg: #0a0a0a;
+    --frame-border: rgba(255,255,255,0.06);
+    --bezel: 14px;
+    --notch: 32px;
+  }
+  body { margin:0; display:flex; align-items:center; justify-content:center; min-height:100vh; background:#f4f4f5; gap:32px; flex-wrap:wrap; padding:32px; }
+
+  .device {
+    position: relative;
+    background: var(--frame-bg);
+    border-radius: 56px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.18), inset 0 0 0 2px var(--frame-border);
+    overflow: hidden;
+  }
+  .device-iphone { width: 390px; height: 844px; }
+  .device-pixel  { width: 412px; height: 915px; }
+  .device-ipad   { width: 820px; height: 1180px; border-radius: 38px; }
+
+  .screen {
+    position: absolute;
+    inset: var(--bezel);
+    border-radius: calc(56px - var(--bezel));
+    overflow: hidden;
+    background: #fff;
+  }
+  .device-ipad .screen { border-radius: calc(38px - var(--bezel)); }
+
+  .screen iframe {
+    width: 100%; height: 100%; border: 0; display: block;
+  }
+
+  /* iPhone-style notch */
+  .device-iphone .notch {
+    position: absolute; left: 50%; top: var(--bezel);
+    transform: translateX(-50%);
+    width: 120px; height: var(--notch);
+    background: var(--frame-bg);
+    border-radius: 0 0 16px 16px;
+    z-index: 2;
+  }
+
+  /* status bar overlay */
+  .status-bar {
+    position: absolute;
+    left: 0; right: 0;
+    top: calc(var(--bezel) + 6px);
+    height: 22px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 calc(var(--bezel) + 18px);
+    color: #fff;
+    font-family: -apple-system, "SF Pro Text", system-ui;
+    font-size: 14px; font-weight: 600;
+    z-index: 3;
+    pointer-events: none;
+    mix-blend-mode: difference;
+  }
+
+  /* keyboard placeholder (toggle with data-keyboard) */
+  .device[data-keyboard="true"] .keyboard {
+    position: absolute;
+    left: var(--bezel); right: var(--bezel); bottom: var(--bezel);
+    height: 270px;
+    background: linear-gradient(180deg, #d1d5db 0%, #c9ccd1 100%);
+    border-radius: 0 0 calc(56px - var(--bezel)) calc(56px - var(--bezel));
+    border-top: 1px solid rgba(0,0,0,0.08);
+    z-index: 4;
+  }
+  .device:not([data-keyboard="true"]) .keyboard { display: none; }
+
+  /* home indicator */
+  .home-indicator {
+    position: absolute;
+    left: 50%; bottom: 8px;
+    transform: translateX(-50%);
+    width: 134px; height: 5px;
+    background: rgba(255,255,255,0.6);
+    border-radius: 100px;
+    z-index: 5;
+    pointer-events: none;
+  }
+
+  .label { font-family: system-ui; font-size: 12px; color: #525252; text-align: center; }
+</style>
+</head>
+<body>
+
+<div>
+  <div class="device device-iphone" data-keyboard="false">
+    <div class="notch"></div>
+    <div class="status-bar">
+      <span>9:41</span>
+      <span>● ● ●</span>
+    </div>
+    <div class="screen">
+      <iframe src="about:blank" title="iPhone preview"></iframe>
+    </div>
+    <div class="keyboard"></div>
+    <div class="home-indicator"></div>
+  </div>
+  <div class="label" style="margin-top:8px">iPhone 14 · 390×844</div>
+</div>
+
+<div>
+  <div class="device device-pixel" data-keyboard="false">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span>● ● ●</span>
+    </div>
+    <div class="screen">
+      <iframe src="about:blank" title="Pixel preview"></iframe>
+    </div>
+    <div class="keyboard"></div>
+  </div>
+  <div class="label" style="margin-top:8px">Pixel 8 · 412×915</div>
+</div>
+
+</body>
+</html>
