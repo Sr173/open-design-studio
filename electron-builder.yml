@@ -30,8 +30,10 @@ mac:
       arch:
         - arm64
         - x64
-  # 没买 Apple Developer 证书 → 走 ad-hoc 签名(用户首次打开仍需右键 Open)
-  identity: null
+  # 没买 Apple Developer 证书,但 arm64 强制要求至少 ad-hoc 签名
+  # identity: '-' = 用 codesign 的 ad-hoc 模式(本机临时签名,不需要证书)
+  # 不签会触发 "已损坏" 报错;签了用户仍需右键 → 打开确认一次
+  identity: '-'
   # 关闭强制 sandbox(我们需要文件系统访问)
   hardenedRuntime: false
   gatekeeperAssess: false
