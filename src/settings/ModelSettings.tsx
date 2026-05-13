@@ -28,13 +28,20 @@ import {
   type ModelProfile,
 } from '../store/profiles';
 import { useModelList, mergeModels } from './useModelList';
+import {
+  IMAGE_PROVIDER_PRESETS,
+  getImagePresetById,
+  type ImageProviderPreset,
+} from '../llm/imageProviders';
+import { fetchImageConfig } from '../llm/imageGenClient';
+import { saveImageProvider, getImageProvider, clearImageProvider } from '../store/profileSync';
 
 export interface ModelSettingsProps {
   open: boolean;
   onClose: () => void;
 }
 
-type Tab = 'profile' | 'profiles' | 'oauth';
+type Tab = 'profile' | 'profiles' | 'oauth' | 'image';
 
 export function ModelSettings({ open, onClose }: ModelSettingsProps) {
   const [cfg, setCfg] = useState<ServerConfigInfo | null>(null);
@@ -79,6 +86,12 @@ export function ModelSettings({ open, onClose }: ModelSettingsProps) {
               订阅登录
             </button>
             <button
+              onClick={() => setTab('image')}
+              style={{ ...tabBtn, ...(tab === 'image' ? tabBtnActive : null) }}
+            >
+              Image
+            </button>
+            <button
               onClick={() => setTab('profiles')}
               style={{ ...tabBtn, ...(tab === 'profiles' ? tabBtnActive : null) }}
             >
@@ -104,6 +117,10 @@ export function ModelSettings({ open, onClose }: ModelSettingsProps) {
 
         {!loading && cfg && isElectron() && tab === 'oauth' && (
           <OAuthPanel />
+        )}
+
+        {!loading && cfg && isElectron() && tab === 'image' && (
+          <ImageProviderPanel onSaved={() => setRefreshTick((v) => v + 1)} />
         )}
 
         {!loading && cfg && isElectron() && tab === 'profiles' && (
@@ -704,6 +721,235 @@ function OAuthCard({
           {ml.apiModels.length} 个 API model · {formatAgo(ml.fetchedAt)}前拉取
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================================
+// ImageProviderPanel — image gen 独立 provider 配置(generate_image 工具用)
+// ============================================================
+
+function ImageProviderPanel({ onSaved }: { onSaved(): void }) {
+  const [presetId, setPresetId] = useState<string>(IMAGE_PROVIDER_PRESETS[0].id);
+  const preset = getImagePresetById(presetId) ?? IMAGE_PROVIDER_PRESETS[0];
+  const [model, setModel] = useState<string>(preset.models[0] ?? '');
+  const [customModel, setCustomModel] = useState<string>('');
+  const [baseUrl, setBaseUrl] = useState<string>(preset.baseUrl ?? '');
+  const [apiKey, setApiKey] = useState('');
+  const [hasStoredKey, setHasStoredKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [currentConfig, setCurrentConfig] = useState<{ hasKey: boolean; model: string | null; baseUrl: string | null } | null>(null);
+
+  // 启动时:先从 IDB 持久化 image profile 读 → 推到 preset/model/baseUrl
+  // 再拉一次 server-side image config 看是否激活
+  useEffect(() => {
+    (async () => {
+      const persisted = await getImageProvider();
+      if (persisted) {
+        const p = getImagePresetById(persisted.presetId);
+        if (p) {
+          setPresetId(p.id);
+          setModel(persisted.model);
+          if (persisted.baseUrl) setBaseUrl(persisted.baseUrl);
+        }
+      }
+      const c = await fetchImageConfig();
+      if (c) setCurrentConfig(c);
+    })();
+  }, []);
+
+  // 切 preset → 重置
+  useEffect(() => {
+    setBaseUrl(preset.baseUrl ?? '');
+    if (preset.models.length > 0) {
+      setModel(preset.models[0]);
+      setCustomModel('');
+    } else {
+      setModel('');
+    }
+  }, [presetId]);
+
+  // 查 keychain
+  useEffect(() => {
+    const n = native();
+    if (!n) return;
+    n.keychain.get(`image:${presetId}`).then((v) => setHasStoredKey(!!v));
+  }, [presetId, msg]);
+
+  const finalModel = customModel.trim() || model;
+  const canEditBaseUrl = preset.category === 'custom';
+
+  async function save() {
+    setError(null);
+    setMsg(null);
+    const n = native();
+    if (!n) return;
+    if (!finalModel) {
+      setError('请填 model');
+      return;
+    }
+    setSaving(true);
+    try {
+      if (apiKey.trim()) {
+        await n.keychain.set(`image:${presetId}`, apiKey.trim());
+        setHasStoredKey(true);
+      } else if (!hasStoredKey) {
+        setError('请输入 API key(还没存过)');
+        setSaving(false);
+        return;
+      }
+      const finalBaseUrl = baseUrl.trim() || preset.baseUrl;
+      await n.imageProvider.update({
+        account: `image:${presetId}`,
+        model: finalModel,
+        baseUrl: finalBaseUrl,
+      });
+      // 持久化到 IDB,重启自动 sync
+      await saveImageProvider({
+        presetId,
+        model: finalModel,
+        baseUrl: finalBaseUrl ?? null,
+      });
+      setMsg('✓ Image provider 已保存并激活');
+      setApiKey('');
+      onSaved();
+      // 拉一次最新 config 状态
+      fetchImageConfig().then(setCurrentConfig);
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clear() {
+    if (!confirm('清除当前 image provider?生成功能将不可用直到重新配置。')) return;
+    const n = native();
+    if (!n) return;
+    await n.imageProvider.update(null);
+    await clearImageProvider();
+    setMsg('✓ 已清除');
+    fetchImageConfig().then(setCurrentConfig);
+    onSaved();
+  }
+
+  const grouped = {
+    official: IMAGE_PROVIDER_PRESETS.filter((p) => p.category === 'official'),
+    gateway: IMAGE_PROVIDER_PRESETS.filter((p) => p.category === 'gateway'),
+    custom: IMAGE_PROVIDER_PRESETS.filter((p) => p.category === 'custom'),
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.6, marginBottom: 4 }}>
+        给 AI 配生图能力(<Mono>generate_image</Mono> 工具)。默认 AI 不会自动生图,你说"生一张 hero 图"它才调。生图 5-30s,费用 $0.04-0.17/张。
+      </div>
+
+      {currentConfig?.hasKey && (
+        <div style={{
+          padding: '8px 12px',
+          background: 'var(--surface-1)',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--border-subtle)',
+          fontSize: 11,
+          color: 'var(--text-tertiary)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--success, #4ade80)' }} />
+          <span>当前活动:<Mono>{currentConfig.model}</Mono> {currentConfig.baseUrl && <span style={{ color: 'var(--text-disabled)' }}>· {currentConfig.baseUrl}</span>}</span>
+          <div style={{ flex: 1 }} />
+          <button onClick={clear} style={{ ...btnSecondary, padding: '2px 8px', fontSize: 11 }}>清除</button>
+        </div>
+      )}
+
+      <Field label="Provider preset">
+        <select
+          value={presetId}
+          onChange={(e) => setPresetId(e.target.value)}
+          style={selectStyle}
+        >
+          <optgroup label="── Official ──">
+            {grouped.official.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </optgroup>
+          <optgroup label="── Gateways ──">
+            {grouped.gateway.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </optgroup>
+          <optgroup label="── Custom ──">
+            {grouped.custom.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </optgroup>
+        </select>
+        {preset.notes && <div style={hintStyle}>{preset.notes}</div>}
+      </Field>
+
+      <Field label="Model">
+        <select
+          value={preset.models.includes(model) ? model : 'custom'}
+          onChange={(e) => {
+            if (e.target.value === 'custom') {
+              setModel('');
+            } else {
+              setModel(e.target.value);
+              setCustomModel('');
+            }
+          }}
+          style={selectStyle}
+        >
+          {preset.models.map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+          <option value="custom">Custom…</option>
+        </select>
+        {(!preset.models.includes(model) || customModel) && (
+          <input
+            value={customModel || model}
+            onChange={(e) => setCustomModel(e.target.value)}
+            placeholder="自定义 image model 名"
+            style={{ ...inputStyle, marginTop: 6 }}
+          />
+        )}
+      </Field>
+
+      <Field label="Base URL">
+        <input
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          placeholder={preset.baseUrl ?? '留空 = OpenAI 默认 https://api.openai.com/v1'}
+          style={inputStyle}
+          disabled={!canEditBaseUrl}
+        />
+        {!canEditBaseUrl && <div style={hintStyle}>preset 锁定,切到 Custom 才能改</div>}
+      </Field>
+
+      <Field label={`API Key (Keychain: image:${presetId})`}>
+        <input
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={hasStoredKey ? '已存(留空保留当前)' : '粘贴 key'}
+          style={inputStyle}
+        />
+        <div style={hintStyle}>
+          {hasStoredKey ? '✓ 已存,本地 secrets.dat 加密' : '✕ 还没存过 — 请输入'}
+        </div>
+      </Field>
+
+      {error && <div style={{ color: 'var(--error)', fontSize: 12 }}>{error}</div>}
+      {msg && <div style={{ color: 'var(--success, #4ade80)', fontSize: 12 }}>{msg}</div>}
+
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+        <button onClick={save} disabled={saving} style={btnPrimary}>
+          {saving ? '保存中…' : '保存并激活'}
+        </button>
+      </div>
+
+      <div style={footnoteStyle}>
+        Image provider 跟 LLM provider 独立(Anthropic / Gemini 用户也能配 OpenAI 生图)。
+        费用提示:<Mono>gpt-image-1</Mono> standard $0.04/张,high $0.17/张;阿里万相约 ¥0.14/张。AI 默认不主动生图,用户明确说才调。
+      </div>
     </div>
   );
 }

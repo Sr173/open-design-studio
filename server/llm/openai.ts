@@ -33,12 +33,14 @@ export class OpenAIProvider implements LLMProvider {
 
     const tools = req.tools.map(toOpenAITool);
 
+    // max_tokens 只在客户端显式传时才发 — 否则让 provider model 默认决定
+    // 这样避免给"上限 64k"的兼容网关(如 dashscope)发 128k 触发 400
     const stream = await this.client.chat.completions.create(
       {
         model: this.model,
         messages: oaiMessages,
         tools: tools.length ? tools : undefined,
-        max_tokens: req.maxTokens ?? 8192,
+        ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
         stream: true,
       },
       { signal: req.signal }

@@ -1,8 +1,12 @@
 /* 工具调用展示 — 默认折叠,显示 "→ write_file index.html (2.3kb)"
  * 点开展开看完整 input + result
+ *
+ * generate_image 特殊处理:result 含图路径时显示缩略 + 估价
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { previewUrl } from '../preview/injectBuilder';
+import { getRootPath } from '../store/files';
 
 export interface ToolCallBlockProps {
   name: string;
@@ -10,10 +14,11 @@ export interface ToolCallBlockProps {
   result?: { content: string; is_error?: boolean };
   /** 流式中(args 还在累积),显示小圈 */
   streaming?: boolean;
+  projectId?: number;
 }
 
-export function ToolCallBlock({ name, input, result, streaming }: ToolCallBlockProps) {
-  const [open, setOpen] = useState(false);
+export function ToolCallBlock({ name, input, result, streaming, projectId }: ToolCallBlockProps) {
+  const [open, setOpen] = useState(name === 'generate_image' && !!result); // 生图默认展开看图
   const summary = makeSummary(name, input);
   const errored = result?.is_error;
 
@@ -79,7 +84,12 @@ export function ToolCallBlock({ name, input, result, streaming }: ToolCallBlockP
               {JSON.stringify(input, null, 2)}
             </pre>
           </Section>
-          {result && (
+          {result && name === 'generate_image' && !errored && (
+            <Section label="generated">
+              <ImagePreview projectId={projectId} content={result.content} />
+            </Section>
+          )}
+          {result && (name !== 'generate_image' || errored) && (
             <Section label="result">
               <pre
                 style={{
@@ -145,7 +155,64 @@ function makeSummary(name: string, input: any): string {
   if (name === 'show_to_user') return String(input.path ?? '');
   if (name === 'done') return String(input.summary ?? '');
   if (name === 'list_files') return '';
+  if (name === 'generate_image') {
+    const f = String(input.filename ?? '?.png');
+    const sz = String(input.size ?? '1024x1024');
+    const q = String(input.quality ?? 'standard');
+    return `uploads/${f} · ${sz} · ${q}`;
+  }
   return Object.keys(input).join(', ');
+}
+
+// generate_image 的图片预览 — content 里有 "uploads/xxx.png" 字符串,解出来用 previewUrl 加载
+function ImagePreview({ projectId, content }: { projectId?: number; content: string }) {
+  const [rootPath, setRootPath] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!projectId) return;
+    getRootPath(projectId).then(setRootPath).catch(() => setRootPath(null));
+  }, [projectId]);
+
+  const m = content.match(/uploads\/[^\s]+/);
+  if (!m || !projectId || rootPath === undefined) {
+    return <pre style={preStyle}>{content}</pre>;
+  }
+  const imgPath = m[0];
+  const url = previewUrl(projectId, imgPath, Date.now(), rootPath);
+  // 解析估价(content 含 "estimated cost: $0.040")
+  const costMatch = content.match(/estimated cost:\s*\$([\d.]+)/);
+  const cost = costMatch ? `$${parseFloat(costMatch[1]).toFixed(3)}` : null;
+  const revisedMatch = content.match(/revised prompt:\s*(.+?)(?:\)|$)/);
+  const revised = revisedMatch ? revisedMatch[1].trim() : null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <img
+        src={url}
+        alt={imgPath}
+        style={{
+          maxWidth: '100%',
+          maxHeight: 280,
+          borderRadius: 4,
+          border: '1px solid var(--border-subtle)',
+          display: 'block',
+        }}
+      />
+      <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-tertiary)', alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontFamily: 'var(--font-mono)' }}>{imgPath}</span>
+        {cost && (
+          <span style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>
+            ~{cost}
+          </span>
+        )}
+      </div>
+      {revised && (
+        <div style={{ fontSize: 11, color: 'var(--text-disabled)', fontStyle: 'italic', lineHeight: 1.4 }}>
+          provider revised → {revised}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function humanBytes(n: number): string {

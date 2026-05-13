@@ -14,6 +14,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
 import { createProvider } from './llm/factory.js';
+import { generateImage, type ImageProviderConfig, type GenerateImageInput } from './imageGen.js';
 import { buildSystemPrompt } from './llm/systemPrompt.js';
 import { readSkillSection, listSkillSections } from './skill-chapters.js';
 import {
@@ -93,6 +94,19 @@ export function updateProvider(cfg: {
   console.log(`[server] provider updated → ${cfg.provider} / ${cfg.model}${cfg.authMode === 'oauth' ? ' (oauth)' : ''}`);
 }
 
+// === Image provider 独立状态 ===
+// 跟 LLM provider 完全独立 —— 因为 Anthropic / Gemini 用户也想生图,
+// 必须能单独配 OpenAI / 阿里万相 等 image-only provider。
+let imageProviderConfig: ImageProviderConfig | null = null;
+export function updateImageProvider(cfg: ImageProviderConfig | null) {
+  imageProviderConfig = cfg;
+  if (cfg) {
+    console.log(`[server] image provider updated → ${cfg.baseUrl ?? 'openai-default'} / ${cfg.model}`);
+  } else {
+    console.log('[server] image provider cleared');
+  }
+}
+
 // === Hono app ===
 const app = new Hono();
 
@@ -159,6 +173,40 @@ app.get('/api/llm/config', (c) => {
   });
 });
 
+app.get('/api/image/config', (c) => {
+  return c.json({
+    hasKey: !!imageProviderConfig,
+    model: imageProviderConfig?.model ?? null,
+    baseUrl: imageProviderConfig?.baseUrl ?? null,
+  });
+});
+
+app.post('/api/image/generate', async (c) => {
+  if (!imageProviderConfig) {
+    return c.json(
+      { error: 'image provider 未配置 — 去设置面板 → Image tab 配 key' },
+      503,
+    );
+  }
+  let body: GenerateImageInput;
+  try {
+    body = (await c.req.json()) as GenerateImageInput;
+  } catch {
+    return c.json({ error: 'invalid JSON' }, 400);
+  }
+  if (!body?.prompt || typeof body.prompt !== 'string') {
+    return c.json({ error: 'prompt 必传 (string)' }, 400);
+  }
+  try {
+    const result = await generateImage(imageProviderConfig, body, c.req.raw.signal ?? undefined);
+    return c.json(result);
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    console.error('[image-gen] error:', msg);
+    return c.json({ error: msg }, 502);
+  }
+});
+
 interface ChatBody {
   messages: ProviderMessage[];
   tools: ChatToolDef[];
@@ -207,9 +255,13 @@ app.post('/api/llm/chat', async (c) => {
     ];
 
     const system = buildSystemPrompt();
-    // Opus 4.7 输出硬上限 128k(实测确认 200k+ 会被 Anthropic 直接拒)
-    // 这是 cap 不是预分配,实际只按真生成的 token 计费
-    const maxTokens = body.maxTokens ?? 128_000;
+    // maxTokens 由 provider 各自决定默认(每家上限不同):
+    //   Anthropic Opus 4.7:128k(必传 max_tokens)
+    //   OpenAI 主流模型:4-16k;某些兼容网关(如 dashscope 通义)上限只到 64k
+    //   Gemini:8k
+    //   Codex:让后端决定(不发 max_output_tokens)
+    // 客户端没显式传就不在 server 加默认,避免给上游一个超过其上限的值。
+    const maxTokens = body.maxTokens;
 
     // === Server-managed tool loop ===
     // 一轮 LLM → 若 stop=tool_use 且全 server-managed,server 内部跑工具继续;

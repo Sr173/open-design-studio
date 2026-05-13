@@ -21,7 +21,7 @@ import {
   stopAllWatchers,
   markAIWrite,
 } from './services/watcher.js';
-import { updateProvider } from '../server/index.js';
+import { updateProvider, updateImageProvider } from '../server/index.js';
 
 export function registerIpc(getMainWindow: () => BrowserWindow | null) {
   // === fs ===
@@ -155,6 +155,32 @@ export function registerIpc(getMainWindow: () => BrowserWindow | null) {
       });
       return { ok: true };
     }
+  );
+
+  // === Image provider 切换(独立于 LLM provider)===
+  ipcMain.handle(
+    'image-provider:update',
+    async (
+      _e,
+      cfg: {
+        account: string;   // keychain account 名(image:openai / image:dashscope / ...)
+        model: string;     // 'gpt-image-1' / 'wanx-v1' / 等
+        baseUrl?: string;
+      } | null,
+    ) => {
+      if (!cfg) {
+        updateImageProvider(null);
+        return { ok: true };
+      }
+      const apiKey = await keychainService.getKey(cfg.account);
+      if (!apiKey) throw new Error(`image keychain 里没找到 account=${cfg.account}`);
+      updateImageProvider({
+        apiKey,
+        model: cfg.model,
+        baseUrl: cfg.baseUrl,
+      });
+      return { ok: true };
+    },
   );
 
   // === Models list ===

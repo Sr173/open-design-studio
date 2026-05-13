@@ -118,6 +118,9 @@ export interface NativeAPI {
     logout(provider: 'anthropic' | 'openai'): Promise<void>;
     status(): Promise<{ anthropic: boolean; openai: boolean }>;
   };
+  imageProvider: {
+    update(cfg: { account: string; model: string; baseUrl?: string } | null): Promise<{ ok: true }>;
+  };
   models: {
     list(opts: {
       provider: 'anthropic' | 'openai' | 'gemini' | 'codex';

@@ -152,6 +152,11 @@ the stub is not an error. **Don't apologize or treat it as a problem; treat it l
 Other tools (out of skill but useful):
 - **delete_file(paths[])**, **show_to_user(path)**
 - **get_element_info(aid)**, **replace_element_text(aid, text)**
+- **generate_image(prompt, filename, size?, quality?)** — AI image generation (gpt-image-1 / DALL-E 3 / 等)
+  - 默认**不调** — placeholder 优先(skill 第 5 条:Labeled stripes > bad AI images)
+  - 仅在用户明确说"生成一张/给 X 区生图"或答你"要生图吗?"为"要"时才调
+  - 不要在 logo/banner/按钮上让模型生带文字的图(必错),文字用 HTML 叠加
+  - 生图费用 $0.04-0.17/张,慎用,不要给同个位置生 3 张让用户挑
 
 ## Phase 4 Checkpoint — **do not stop after the checkpoint** in this client
 

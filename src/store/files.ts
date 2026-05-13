@@ -33,7 +33,7 @@ function emit(e: FileChangeEvent) {
 
 // 项目级 cache:projectId → rootPath。频繁读 IDB 太贵
 const rootPathCache = new Map<number, string | null>();
-async function getRootPath(projectId: number): Promise<string | null> {
+export async function getRootPath(projectId: number): Promise<string | null> {
   if (rootPathCache.has(projectId)) return rootPathCache.get(projectId) ?? null;
   const p = await db.projects.get(projectId);
   const rp = p?.rootPath ?? null;

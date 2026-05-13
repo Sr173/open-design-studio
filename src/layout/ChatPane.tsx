@@ -186,6 +186,7 @@ export function ChatPane({ controller, onOpenSettings }: ChatPaneProps) {
                 ? controller.getStreamingBlocks()
                 : null
             }
+            toolResultMap={toolResultMap(messages)}
           />
         ))}
 
@@ -354,16 +355,34 @@ export function ChatPane({ controller, onOpenSettings }: ChatPaneProps) {
 
 // === message view ===
 
+// 收集所有 tool_use_id → tool_result 映射,给 ToolCallBlock 拿对应 result 展示
+function toolResultMap(
+  messages: ChatMessage[]
+): Map<string, { content: string | Block[]; is_error?: boolean }> {
+  const map = new Map<string, { content: string | Block[]; is_error?: boolean }>();
+  for (const m of messages) {
+    if (m.role !== 'user') continue;
+    for (const b of m.blocks) {
+      if (b.type === 'tool_result') {
+        map.set(b.tool_use_id, { content: b.content, is_error: b.is_error });
+      }
+    }
+  }
+  return map;
+}
+
 function MessageView({
   message,
   controller,
   isStreaming,
   streamingBlocks,
+  toolResultMap: trMap,
 }: {
   message: ChatMessage;
   controller: ChatController;
   isStreaming: boolean;
   streamingBlocks: Block[] | null;
+  toolResultMap: Map<string, { content: string | Block[]; is_error?: boolean }>;
 }) {
   const blocks = isStreaming && streamingBlocks ? streamingBlocks : message.blocks;
   const isUser = message.role === 'user';
@@ -488,7 +507,15 @@ function MessageView({
         }}
       >
         {blocks.map((b, i) => (
-          <BlockView key={i} block={b} streaming={isStreaming} />
+          <BlockView
+            key={i}
+            block={b}
+            streaming={isStreaming}
+            projectId={controller.projectId}
+            toolResult={
+              b.type === 'tool_use' ? trMap.get(b.id) : undefined
+            }
+          />
         ))}
         {!isUser && isStreaming && blocks.length === 0 && (
           <span style={{ color: 'var(--text-tertiary)' }}>…</span>
@@ -660,19 +687,37 @@ function DryRunPanel({
 function BlockView({
   block,
   streaming,
+  projectId,
+  toolResult,
 }: {
   block: Block;
   streaming?: boolean;
+  projectId?: number;
+  toolResult?: { content: string | Block[]; is_error?: boolean };
 }) {
   if (block.type === 'text') {
     return <Markdown text={block.text} />;
   }
   if (block.type === 'tool_use') {
+    // 把 array 形式的 content flatten 成 string(generate_image 是 string content)
+    const flatResult = toolResult
+      ? {
+          content:
+            typeof toolResult.content === 'string'
+              ? toolResult.content
+              : (toolResult.content as Block[])
+                  .map((c) => (c.type === 'text' ? c.text : ''))
+                  .join('\n'),
+          is_error: toolResult.is_error,
+        }
+      : undefined;
     return (
       <ToolCallBlock
         name={block.name}
         input={block.input}
         streaming={streaming}
+        projectId={projectId}
+        result={flatResult}
       />
     );
   }

@@ -481,6 +481,56 @@ export const V1_TOOLS: ChatToolDef[] = [
     },
   },
   {
+    name: 'generate_image',
+    description:
+      '【慎用】用 AI 图像模型(gpt-image-1 / DALL-E 3 / 阿里万相等)生成素材图,存到项目 uploads/ 目录。' +
+      '\n\n**何时调用 — 必须满足以下任一条件**:' +
+      '\n  1. 用户明确说"帮我生成一张/几张图"或类似指令' +
+      '\n  2. 用户答复你的"要不要帮你生一张图?"问题,选了"要"' +
+      '\n  3. 你的回答里已经明确说明"我会生成一张 X 的图" 且 prompt 描述清晰' +
+      '\n\n**绝对不要做的**:' +
+      '\n  - 看到 hero 区/插画位就自己悄悄生图(违反 design-work 纪律,placeholder 优先)' +
+      '\n  - 一次性给同个位置生 3 张让用户挑(浪费用户钱)' +
+      '\n  - 在 logo / banner / 按钮上"生成带文字的图"(AI 图模型画文字几乎必错,文字用 HTML 叠加)' +
+      '\n\nbatch 模式:filenames 多个 + prompts 同样多个 → 一次工具调用批量生成多张,适合需要"风格一致的多张 icon" / "同一系列插画"等场景。注意每张都按 standard $0.04 / high $0.17 单独计费。' +
+      '\n\n参数说明:' +
+      '\n  - prompt:画什么的描述(英文质量更稳)。主体 + 风格 + 色调 + 构图' +
+      '\n  - filename:存 uploads/ 下的文件名,如 "hero-bg.png"。自动加 uploads/ 前缀' +
+      '\n  - size:1024x1024 / 1024x1792(竖) / 1792x1024(横),默认 1024x1024' +
+      '\n  - quality:standard(便宜)/ high(关键素材用,4x 价格)' +
+      '\n  - batch:数组形式,每项 { filename, prompt }。给了 batch 就忽略顶层 prompt/filename' +
+      '\n\n费用 + 延迟:standard $0.04/张,high $0.17/张;生成 5-30s,iframe 自动加载结果。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: '单图模式 — 图像描述' },
+        filename: { type: 'string', description: '单图模式 — 文件名(含 .png 后缀)' },
+        size: {
+          type: 'string',
+          enum: ['1024x1024', '1024x1792', '1792x1024'],
+          description: '默认 1024x1024,batch 模式下整 batch 共用此 size',
+        },
+        quality: {
+          type: 'string',
+          enum: ['standard', 'high'],
+          description: '默认 standard,batch 模式下整 batch 共用此 quality',
+        },
+        batch: {
+          type: 'array',
+          description: '批量模式 — 每张图独立 filename + prompt,顺序生成',
+          items: {
+            type: 'object',
+            properties: {
+              filename: { type: 'string' },
+              prompt: { type: 'string' },
+            },
+            required: ['filename', 'prompt'],
+          },
+        },
+      },
+    },
+  },
+  {
     name: 'done',
     description:
       '宣告本轮工作完成,把控制权还给用户。summary 是一两句话概括做了什么,会在 chat 显示。',
@@ -527,6 +577,8 @@ export async function executeTool(
       return execDeleteFile(input, ctx);
     case 'show_to_user':
       return execShowToUser(input, ctx);
+    case 'generate_image':
+      return execGenerateImage(input, ctx);
     case 'done':
       return execDone(input, ctx);
     case 'get_element_info':
@@ -1075,6 +1127,115 @@ async function execShowToUser(
   const path = String(input?.path ?? 'index.html');
   ctx.onShow?.(path);
   return { content: `now showing ${path}` };
+}
+
+async function execGenerateImage(
+  input: any,
+  ctx: ToolExecCtx
+): Promise<ToolResult> {
+  const size = input?.size ?? '1024x1024';
+  const quality = input?.quality ?? 'standard';
+
+  // 拼出任务列表:batch 模式 → 每项独立;单图模式 → 一个任务
+  type Job = { prompt: string; filename: string };
+  let jobs: Job[];
+  if (Array.isArray(input?.batch) && input.batch.length > 0) {
+    jobs = input.batch.map((b: any) => ({
+      prompt: String(b?.prompt ?? '').trim(),
+      filename: String(b?.filename ?? '').trim(),
+    }));
+  } else {
+    jobs = [{
+      prompt: String(input?.prompt ?? '').trim(),
+      filename: String(input?.filename ?? '').trim(),
+    }];
+  }
+  // 校验每项
+  for (const j of jobs) {
+    if (!j.prompt || !j.filename) {
+      return { content: '每个任务都必须有 prompt + filename(batch 模式下 batch 数组里每项亦然)', is_error: true };
+    }
+    if (!j.filename.match(/\.(png|jpg|jpeg|webp)$/i)) {
+      return { content: `filename 必须以 .png/.jpg/.webp 结尾,收到 "${j.filename}"`, is_error: true };
+    }
+  }
+  // 强制 uploads/ 前缀
+  jobs = jobs.map((j) => ({
+    prompt: j.prompt,
+    filename: j.filename.replace(/^\/+/, '').replace(/^uploads\/+/, ''),
+  }));
+
+  const { generateImage } = await import('./imageGenClient');
+
+  const results: Array<{ path: string; cost?: number; revised?: string; model?: string }> = [];
+  const errors: Array<{ filename: string; error: string }> = [];
+
+  for (let i = 0; i < jobs.length; i++) {
+    if (ctx.signal.aborted) {
+      errors.push({ filename: jobs[i].filename, error: 'aborted by user' });
+      break;
+    }
+    const j = jobs[i];
+    const targetPath = `uploads/${j.filename}`;
+    ctx.onWriteStart?.(
+      jobs.length > 1
+        ? `${targetPath} (AI 生图中 ${i + 1}/${jobs.length}…)`
+        : `${targetPath} (AI 生图中…)`,
+    );
+    try {
+      const r = await generateImage(
+        { prompt: j.prompt, size, quality },
+        ctx.signal,
+      );
+      if (r.images.length === 0) {
+        errors.push({ filename: j.filename, error: 'provider 返回空图' });
+        continue;
+      }
+      await writeFile(ctx.projectId, targetPath, r.images[0], 'binary', 'ai');
+      results.push({
+        path: targetPath,
+        cost: r.estimatedCost,
+        revised: r.revisedPrompt && r.revisedPrompt !== j.prompt ? r.revisedPrompt : undefined,
+        model: r.model,
+      });
+    } catch (e: any) {
+      errors.push({ filename: j.filename, error: e?.message ?? String(e) });
+    }
+  }
+
+  // 全失败 → is_error
+  if (results.length === 0) {
+    const errText = errors.map((e) => `  - ${e.filename}: ${e.error}`).join('\n');
+    return {
+      content: `全部生图失败:\n${errText}\n\n常见原因:image provider 没配 key(设置面板 → Image tab),或上游限流。换 provider 重试。`,
+      is_error: true,
+    };
+  }
+
+  // 汇总报告
+  const lines: string[] = [];
+  if (jobs.length > 1) {
+    lines.push(`✓ batch 生图完成:${results.length}/${jobs.length} 成功`);
+  } else {
+    lines.push(`✓ 图已生成并保存到 ${results[0].path}`);
+  }
+  let totalCost = 0;
+  for (const r of results) {
+    lines.push(`  - ${r.path}${r.cost ? ` (~$${r.cost.toFixed(3)})` : ''}`);
+    if (r.revised) lines.push(`    revised: ${r.revised.slice(0, 200)}`);
+    totalCost += r.cost ?? 0;
+  }
+  if (totalCost > 0 && results.length > 1) {
+    lines.push(`total estimated cost: $${totalCost.toFixed(3)}`);
+  } else if (results.length === 1 && results[0].cost) {
+    lines.push(`estimated cost: $${results[0].cost.toFixed(3)}`);
+  }
+  if (errors.length > 0) {
+    lines.push(`\n⚠ ${errors.length} 个失败:`);
+    for (const e of errors) lines.push(`  - ${e.filename}: ${e.error}`);
+  }
+  lines.push(`\n下一步:在 HTML 里写 <img src="uploads/..." alt="...">`);
+  return { content: lines.join('\n') };
 }
 
 async function execDone(input: any, ctx: ToolExecCtx): Promise<ToolResult> {

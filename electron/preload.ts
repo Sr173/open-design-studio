@@ -167,6 +167,13 @@ const native = {
     },
   },
 
+  // === Image provider 切换(独立于 LLM provider)===
+  imageProvider: {
+    update(cfg: { account: string; model: string; baseUrl?: string } | null): Promise<{ ok: true }> {
+      return ipcRenderer.invoke('image-provider:update', cfg);
+    },
+  },
+
   // === Models list (动态拉取) ===
   models: {
     list(opts: {
