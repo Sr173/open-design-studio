@@ -118,6 +118,18 @@ export interface NativeAPI {
     logout(provider: 'anthropic' | 'openai'): Promise<void>;
     status(): Promise<{ anthropic: boolean; openai: boolean }>;
   };
+  models: {
+    list(opts: {
+      provider: 'anthropic' | 'openai' | 'gemini' | 'codex';
+      account: string;
+      baseUrl?: string;
+    }): Promise<{
+      source: 'api' | 'unsupported';
+      models: string[];
+      displayNames?: Record<string, string>;
+      fetchedAt: number;
+    }>;
+  };
 }
 
 declare global {

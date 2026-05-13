@@ -27,6 +27,7 @@ import {
   deleteProfile,
   type ModelProfile,
 } from '../store/profiles';
+import { useModelList, mergeModels } from './useModelList';
 
 export interface ModelSettingsProps {
   open: boolean;
@@ -182,6 +183,15 @@ function ElectronEditor({
 
   const canEditBaseUrl = preset.category === 'custom' || preset.category === 'local';
 
+  // 动态拉 model 列表 — 只有已存 key 才有意义(否则 IPC 拉不到)
+  const ml = useModelList({
+    provider: preset.provider,
+    account: presetId,
+    baseUrl: baseUrl.trim() || preset.baseUrl || null,
+    skip: !hasStoredKey || preset.provider === 'codex' || preset.category === 'local',
+  });
+  const mergedModels = mergeModels(preset.models, ml.apiModels);
+
   async function save() {
     setError(null);
     setMsg(null);
@@ -278,16 +288,51 @@ function ElectronEditor({
       </Field>
 
       <Field label="Model">
-        <select
-          value={modelChoice}
-          onChange={(e) => setModelChoice(e.target.value)}
-          style={selectStyle}
-        >
-          {preset.models.map((m) => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-          <option value="custom">Custom…</option>
-        </select>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <select
+            value={modelChoice}
+            onChange={(e) => setModelChoice(e.target.value)}
+            style={{ ...selectStyle, flex: 1 }}
+          >
+            {/* preset 推荐(在前)+ API 拉到的(去重在后)*/}
+            {preset.models.length > 0 && (
+              <optgroup label={`── 推荐 (${preset.label}) ──`}>
+                {preset.models.map((m) => (
+                  <option key={`p-${m}`} value={m}>{m}</option>
+                ))}
+              </optgroup>
+            )}
+            {ml.apiModels.length > 0 && (
+              <optgroup label={`── API 列表 (${ml.source === 'cache' ? '缓存' : '实时'}) ──`}>
+                {ml.apiModels
+                  .filter((m) => !preset.models.includes(m))
+                  .map((m) => (
+                    <option key={`a-${m}`} value={m}>
+                      {ml.displayNames[m] ? `${m} — ${ml.displayNames[m]}` : m}
+                    </option>
+                  ))}
+              </optgroup>
+            )}
+            <option value="custom">Custom…</option>
+          </select>
+          <button
+            type="button"
+            onClick={ml.refresh}
+            disabled={ml.loading || !hasStoredKey || preset.provider === 'codex'}
+            style={refreshBtnStyle}
+            title={
+              !hasStoredKey
+                ? '需要先存 API key 才能拉列表'
+                : preset.provider === 'codex'
+                  ? 'Codex 后端不支持列表查询'
+                  : ml.loading
+                    ? '正在拉取…'
+                    : `从 ${preset.label} 重新拉一次 model 列表`
+            }
+          >
+            {ml.loading ? '⟳' : '↻'}
+          </button>
+        </div>
         {modelChoice === 'custom' && (
           <input
             value={customModelInput}
@@ -295,6 +340,17 @@ function ElectronEditor({
             placeholder="自定义 model 名(完全照搬 provider 的命名)"
             style={{ ...inputStyle, marginTop: 6 }}
           />
+        )}
+        {mergedModels.length > preset.models.length && (
+          <div style={hintStyle}>
+            发现 {ml.apiModels.length} 个 API 列表 model
+            {ml.fetchedAt && ` · ${formatAgo(ml.fetchedAt)}前拉取`}
+          </div>
+        )}
+        {ml.error && (
+          <div style={{ fontSize: 11, color: 'var(--error)', marginTop: 4 }}>
+            拉取失败:{ml.error.slice(0, 200)}
+          </div>
         )}
       </Field>
 
@@ -463,22 +519,24 @@ function OAuthPanel() {
       </div>
 
       <OAuthCard
+        oauthProvider="anthropic"
         title="Claude (Anthropic Console)"
         subtitle="Pro / Team / Enterprise · 用 Claude Code 的 OAuth 端点"
         logged={st.anthropic}
         busy={busy === 'anthropic'}
-        models={getPresetById('anthropic-oauth')!.models}
+        preset={getPresetById('anthropic-oauth')!}
         selectedModel={models.anthropic}
         onModelChange={(m) => changeModel('anthropic', m)}
         onLogin={() => login('anthropic')}
         onLogout={() => logout('anthropic')}
       />
       <OAuthCard
+        oauthProvider="openai"
         title="ChatGPT (OpenAI Codex)"
         subtitle="Plus / Team · 用 Codex CLI 的 OAuth 端点"
         logged={st.openai}
         busy={busy === 'openai'}
-        models={getPresetById('openai-oauth-codex')!.models}
+        preset={getPresetById('openai-oauth-codex')!}
         selectedModel={models.openai}
         onModelChange={(m) => changeModel('openai', m)}
         onLogin={() => login('openai')}
@@ -497,18 +555,32 @@ function OAuthPanel() {
 }
 
 function OAuthCard({
-  title, subtitle, logged, busy, models, selectedModel, onModelChange, onLogin, onLogout,
+  oauthProvider, title, subtitle, logged, busy, preset, selectedModel,
+  onModelChange, onLogin, onLogout,
 }: {
+  oauthProvider: 'anthropic' | 'openai';
   title: string;
   subtitle: string;
   logged: boolean;
   busy: boolean;
-  models: string[];
+  preset: ProviderPreset;
   selectedModel: string;
   onModelChange(m: string): void;
   onLogin(): void;
   onLogout(): void;
 }) {
+  const account = `oauth:${oauthProvider === 'anthropic' ? 'anthropic' : 'openai-codex'}`;
+  // 动态拉 OAuth 账号能用的 model 列表(Codex/OpenAI 的 ChatGPT backend 返 unsupported)
+  const ml = useModelList({
+    provider: preset.provider,
+    account,
+    baseUrl: preset.baseUrl ?? null,
+    skip: !logged || preset.provider === 'codex',
+  });
+  const merged = mergeModels(preset.models, ml.apiModels);
+  const isCustomSelected = !merged.includes(selectedModel) && selectedModel !== '';
+  const [customInput, setCustomInput] = useState(isCustomSelected ? selectedModel : '');
+
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', gap: 10,
@@ -537,20 +609,80 @@ function OAuthCard({
           </button>
         )}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 11, color: 'var(--text-tertiary)', minWidth: 36 }}>Model</span>
         <select
-          value={selectedModel}
-          onChange={(e) => onModelChange(e.target.value)}
+          value={isCustomSelected ? 'custom' : selectedModel}
+          onChange={(e) => {
+            if (e.target.value === 'custom') {
+              if (customInput) onModelChange(customInput);
+            } else {
+              onModelChange(e.target.value);
+            }
+          }}
           style={{ ...selectStyle, flex: 1 }}
           disabled={!logged}
           title={logged ? '切换 model 立即生效' : '登录后才能选 model'}
         >
-          {models.map((m) => (
-            <option key={m} value={m}>{m}</option>
-          ))}
+          {preset.models.length > 0 && (
+            <optgroup label="── 推荐 ──">
+              {preset.models.map((m) => (
+                <option key={`p-${m}`} value={m}>{m}</option>
+              ))}
+            </optgroup>
+          )}
+          {ml.apiModels.filter((m) => !preset.models.includes(m)).length > 0 && (
+            <optgroup label={`── API 列表 (${ml.source === 'cache' ? '缓存' : '实时'}) ──`}>
+              {ml.apiModels
+                .filter((m) => !preset.models.includes(m))
+                .map((m) => (
+                  <option key={`a-${m}`} value={m}>
+                    {ml.displayNames[m] ? `${m} — ${ml.displayNames[m]}` : m}
+                  </option>
+                ))}
+            </optgroup>
+          )}
+          <option value="custom">Custom…</option>
         </select>
+        <button
+          type="button"
+          onClick={ml.refresh}
+          disabled={ml.loading || !logged || preset.provider === 'codex'}
+          style={refreshBtnStyle}
+          title={
+            !logged
+              ? '登录后才能拉列表'
+              : preset.provider === 'codex'
+                ? 'Codex 后端不支持列表查询(模型写死)'
+                : ml.loading
+                  ? '正在拉取…'
+                  : '从 OAuth API 重新拉一次 model 列表'
+          }
+        >
+          {ml.loading ? '⟳' : '↻'}
+        </button>
       </div>
+      {isCustomSelected && (
+        <input
+          value={customInput}
+          onChange={(e) => {
+            setCustomInput(e.target.value);
+            if (e.target.value.trim()) onModelChange(e.target.value.trim());
+          }}
+          placeholder="自定义 model 名"
+          style={{ ...inputStyle }}
+        />
+      )}
+      {ml.error && logged && (
+        <div style={{ fontSize: 11, color: 'var(--error)' }}>
+          拉取失败:{ml.error.slice(0, 160)}
+        </div>
+      )}
+      {ml.apiModels.length > 0 && ml.fetchedAt && (
+        <div style={{ fontSize: 10, color: 'var(--text-disabled)' }}>
+          {ml.apiModels.length} 个 API model · {formatAgo(ml.fetchedAt)}前拉取
+        </div>
+      )}
     </div>
   );
 }
@@ -771,6 +903,30 @@ const hintStyle: React.CSSProperties = {
   color: 'var(--text-tertiary)',
   marginTop: 4,
 };
+
+const refreshBtnStyle: React.CSSProperties = {
+  padding: '4px 8px',
+  background: 'transparent',
+  color: 'var(--text-secondary)',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 3,
+  fontSize: 14,
+  cursor: 'pointer',
+  flex: '0 0 auto',
+  height: 28,
+  width: 28,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+
+function formatAgo(ts: number): string {
+  const sec = Math.floor((Date.now() - ts) / 1000);
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h`;
+  return `${Math.floor(sec / 86400)}d`;
+}
 
 const footnoteStyle: React.CSSProperties = {
   fontSize: 11,

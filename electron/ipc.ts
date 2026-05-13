@@ -13,6 +13,7 @@ import * as fsService from './services/fs.js';
 import * as gitService from './services/git.js';
 import * as keychainService from './services/keychain.js';
 import * as oauthService from './services/oauth.js';
+import * as modelsListService from './services/modelsList.js';
 import { getInstallationId } from './services/installationId.js';
 import {
   startWatcher,
@@ -154,6 +155,12 @@ export function registerIpc(getMainWindow: () => BrowserWindow | null) {
       });
       return { ok: true };
     }
+  );
+
+  // === Models list ===
+  ipcMain.handle(
+    'models:list',
+    (_e, opts: modelsListService.ListModelsOpts) => modelsListService.listModels(opts)
   );
 
   // === OAuth ===

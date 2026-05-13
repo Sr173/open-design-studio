@@ -167,6 +167,22 @@ const native = {
     },
   },
 
+  // === Models list (动态拉取) ===
+  models: {
+    list(opts: {
+      provider: 'anthropic' | 'openai' | 'gemini' | 'codex';
+      account: string;
+      baseUrl?: string;
+    }): Promise<{
+      source: 'api' | 'unsupported';
+      models: string[];
+      displayNames?: Record<string, string>;
+      fetchedAt: number;
+    }> {
+      return ipcRenderer.invoke('models:list', opts);
+    },
+  },
+
   // === OAuth ===
   oauth: {
     login(provider: 'anthropic' | 'openai'): Promise<{
