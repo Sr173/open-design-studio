@@ -70,6 +70,36 @@ interface CallbackResult {
   state: string;
 }
 
+/** 探测端口是否可用 — 用一个临时 server listen 一下立即关掉 */
+async function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once('error', () => resolve(false));
+    probe.once('listening', () => {
+      probe.close(() => resolve(true));
+    });
+    probe.listen(port, '127.0.0.1');
+  });
+}
+
+/** 找占用某端口的进程命令(macOS / Linux) */
+async function findPortHolder(port: number): Promise<string> {
+  try {
+    const { exec } = await import('node:child_process');
+    return await new Promise<string>((resolve) => {
+      exec(`lsof -i :${port} -P -n -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1`, (err, stdout) => {
+        if (err || !stdout) return resolve('');
+        // 取 COMMAND PID
+        const parts = stdout.trim().split(/\s+/);
+        if (parts.length >= 2) resolve(`${parts[0]} (PID ${parts[1]})`);
+        else resolve('');
+      });
+    });
+  } catch {
+    return '';
+  }
+}
+
 function listenForCallback(port: number, expectedState: string, timeoutMs = 5 * 60_000): Promise<CallbackResult> {
   return new Promise((resolve, reject) => {
     let server: Server | null = null;
@@ -157,11 +187,39 @@ async function runOAuthFlow(opts: {
   clientId: string;
   scope: string;
   callbackPort: number;
-}): Promise<{ code: string; verifier: string }> {
+  /** true = 这个端口在 OpenAI 注册时写死了,占用时报错让用户处理;
+   *  false = 可以 fallback 到附近空闲端口 */
+  portStrict: boolean;
+}): Promise<{ code: string; verifier: string; actualPort: number }> {
+  // 先探测端口
+  let port = opts.callbackPort;
+  if (!(await isPortFree(port))) {
+    if (opts.portStrict) {
+      const holder = await findPortHolder(port);
+      const hint = holder
+        ? `占用进程:${holder}。终端跑 \`kill ${holder.match(/PID (\d+)/)?.[1] ?? ''}\` 释放后再试。`
+        : `终端跑 \`lsof -i :${port}\` 查占用进程,kill 掉再重试。`;
+      throw new Error(
+        `端口 ${port} 已被占用。OpenAI Codex OAuth 要求严格使用此端口(在 client_id 处注册),不能换。\n${hint}\n常见原因:你已经登录过 Codex CLI 并且它的后台进程还在,或者上一次登录没干净退出。`
+      );
+    }
+    // 非 strict:找下一个空闲端口
+    for (let p = port + 1; p < port + 20; p++) {
+      if (await isPortFree(p)) {
+        port = p;
+        console.warn(`[oauth] 端口 ${opts.callbackPort} 被占用,fallback 到 ${p}`);
+        break;
+      }
+    }
+    if (port === opts.callbackPort) {
+      throw new Error(`端口 ${port}~${port + 19} 全被占用,无法启动 callback server`);
+    }
+  }
+
   const verifier = generateVerifier();
   const challenge = generateChallenge(verifier);
   const state = base64url(randomBytes(16));
-  const redirectUri = `http://localhost:${opts.callbackPort}/callback`;
+  const redirectUri = `http://localhost:${port}/callback`;
 
   const params = new URLSearchParams({
     response_type: 'code',
@@ -175,11 +233,11 @@ async function runOAuthFlow(opts: {
   const url = `${opts.authorizeUrl}?${params.toString()}`;
 
   console.log('[oauth] opening browser →', url);
-  const callbackPromise = listenForCallback(opts.callbackPort, state);
+  const callbackPromise = listenForCallback(port, state);
   await shell.openExternal(url);
 
   const { code } = await callbackPromise;
-  return { code, verifier };
+  return { code, verifier, actualPort: port };
 }
 
 async function exchangeCode(opts: {
@@ -233,18 +291,19 @@ async function refreshAccessToken(opts: {
 // === Public API ===
 
 export async function loginAnthropic(): Promise<OAuthTokens> {
-  const callbackPort = 54321;
-  const { code, verifier } = await runOAuthFlow({
+  // Anthropic Console 的 redirect_uri 不严格,占用了就换一个端口
+  const { code, verifier, actualPort } = await runOAuthFlow({
     authorizeUrl: ANTHROPIC.authorizeUrl,
     tokenUrl: ANTHROPIC.tokenUrl,
     clientId: ANTHROPIC.clientId,
     scope: ANTHROPIC.scope,
-    callbackPort,
+    callbackPort: 54321,
+    portStrict: false,
   });
   const tok = await exchangeCode({
     tokenUrl: ANTHROPIC.tokenUrl,
     clientId: ANTHROPIC.clientId,
-    code, verifier, callbackPort,
+    code, verifier, callbackPort: actualPort,
   });
   const tokens: OAuthTokens = {
     accessToken: tok.access_token,
@@ -258,18 +317,19 @@ export async function loginAnthropic(): Promise<OAuthTokens> {
 }
 
 export async function loginOpenAI(): Promise<OAuthTokens> {
-  const callbackPort = 1455; // codex-cli 用这个端口
-  const { code, verifier } = await runOAuthFlow({
+  // Codex CLI 在 OpenAI 注册的 redirect_uri 严格写死 1455,不能 fallback
+  const { code, verifier, actualPort } = await runOAuthFlow({
     authorizeUrl: OPENAI.authorizeUrl,
     tokenUrl: OPENAI.tokenUrl,
     clientId: OPENAI.clientId,
     scope: OPENAI.scope,
-    callbackPort,
+    callbackPort: 1455,
+    portStrict: true,
   });
   const tok = await exchangeCode({
     tokenUrl: OPENAI.tokenUrl,
     clientId: OPENAI.clientId,
-    code, verifier, callbackPort,
+    code, verifier, callbackPort: actualPort,
   });
   const tokens: OAuthTokens = {
     accessToken: tok.access_token,
