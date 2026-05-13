@@ -577,9 +577,25 @@ function OAuthCard({
     baseUrl: preset.baseUrl ?? null,
     skip: !logged || preset.provider === 'codex',
   });
-  const merged = mergeModels(preset.models, ml.apiModels);
-  const isCustomSelected = !merged.includes(selectedModel) && selectedModel !== '';
-  const [customInput, setCustomInput] = useState(isCustomSelected ? selectedModel : '');
+  // 显式 mode — 不从 selectedModel 派生,避免点 Custom 时 input 不弹的死锁
+  const [mode, setMode] = useState<'list' | 'custom'>(() =>
+    selectedModel && !preset.models.includes(selectedModel) ? 'custom' : 'list'
+  );
+  const [customInput, setCustomInput] = useState(
+    selectedModel && !preset.models.includes(selectedModel) ? selectedModel : ''
+  );
+  // selectedModel 从父组件改变 → 同步本地状态(profile 重新加载等场景)
+  useEffect(() => {
+    if (!selectedModel) return;
+    const known = preset.models.includes(selectedModel) || ml.apiModels.includes(selectedModel);
+    if (known) {
+      setMode('list');
+    } else {
+      setMode('custom');
+      setCustomInput(selectedModel);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedModel, preset.models.length, ml.apiModels.length]);
 
   return (
     <div style={{
@@ -612,12 +628,16 @@ function OAuthCard({
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 11, color: 'var(--text-tertiary)', minWidth: 36 }}>Model</span>
         <select
-          value={isCustomSelected ? 'custom' : selectedModel}
+          value={mode === 'custom' ? 'custom' : selectedModel}
           onChange={(e) => {
-            if (e.target.value === 'custom') {
-              if (customInput) onModelChange(customInput);
+            const v = e.target.value;
+            if (v === 'custom') {
+              setMode('custom');
+              // 切到 custom 时如果 input 已经有值就 apply,否则让用户输入
+              if (customInput.trim()) onModelChange(customInput.trim());
             } else {
-              onModelChange(e.target.value);
+              setMode('list');
+              onModelChange(v);
             }
           }}
           style={{ ...selectStyle, flex: 1 }}
@@ -662,14 +682,15 @@ function OAuthCard({
           {ml.loading ? '⟳' : '↻'}
         </button>
       </div>
-      {isCustomSelected && (
+      {mode === 'custom' && (
         <input
           value={customInput}
           onChange={(e) => {
             setCustomInput(e.target.value);
             if (e.target.value.trim()) onModelChange(e.target.value.trim());
           }}
-          placeholder="自定义 model 名"
+          placeholder="例如 gpt-5-codex / o1-pro / 任何 model 名"
+          autoFocus
           style={{ ...inputStyle }}
         />
       )}
