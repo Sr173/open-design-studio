@@ -10,10 +10,11 @@
  * 后续 sprint 还会在这里加:fs IPC / dialog / chokidar watcher / keytar
  */
 
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, net } from 'electron';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { existsSync } from 'node:fs';
 // 嵌入式启动 Hono:server/index.ts 已被 refactor 成可 import
 import { startServer, type ServerHandle } from '../server/index.js';
 import { registerIpc, stopAllWatchers } from './ipc.js';
@@ -23,18 +24,67 @@ const __dirname = path.dirname(__filename);
 
 const IS_DEV = !app.isPackaged;
 
+// === 注册 app:// custom protocol ===
+//
+// 为什么用 custom protocol(而不是 loadURL http://127.0.0.1:<port>):
+//   - Hono 用 OS 分配空闲端口,每次重启端口可能变
+//   - 端口变 → origin 变 → IndexedDB 按 origin 隔离 → profile/projects/chat 全丢
+//   - 用 `app://workbench` 固定 origin,即便 Hono 端口变,IDB origin 也稳
+//
+// privileges 必须在 app.whenReady 之前设,否则 SW / fetch / corsEnabled 都不通
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'app',
+    privileges: {
+      standard: true,           // 让 origin、history、cookies 按标准方式工作
+      secure: true,             // SW 注册要求 secure context
+      supportFetchAPI: true,    // fetch() 支持
+      allowServiceWorkers: true, // 必须,否则 PreviewPane SW 注册失败
+      stream: true,             // 流式 response.body
+      corsEnabled: true,
+      bypassCSP: false,
+    },
+  },
+]);
+
 let serverHandle: ServerHandle | null = null;
 let mainWindow: BrowserWindow | null = null;
 
 async function bootHono(): Promise<ServerHandle> {
   // dev:固定 5174 方便排查(也接受 0 自动分配,但 dev 时固定更好调试)
-  // prod:用 0 让 OS 给空闲端口
+  // prod:用 0 让 OS 给空闲端口(端口可变,renderer 走 app:// 协议,origin 不受影响)
   const port = IS_DEV ? 5174 : 0;
   const authToken = randomBytes(24).toString('hex');
-  // packaged 模式:让 Hono 顺便 serve dist/ 静态文件;renderer loadURL Hono baseUrl
-  // 这样:① 资源走 http:// 不受 file:// 协议限制 ② SW 能注册 ③ /api/* 同源不用 CORS
+  // packaged 模式:Hono 仍然 serve dist/(给 /preview/* 等用),但 renderer 自己用
+  // app:// 协议加载,不直连 Hono URL
   const serveStaticDir = IS_DEV ? undefined : path.join(__dirname, '..', 'dist');
   return startServer({ port, authToken, serveStaticDir });
+}
+
+/** 注册 app:// 协议 handler — 从 dist/ 读静态文件,SPA fallback 到 index.html */
+function registerAppProtocol(distDir: string) {
+  protocol.handle('app', async (request) => {
+    const url = new URL(request.url);
+    // url.host = 'workbench',pathname = '/index.html' etc.
+    let pathname = decodeURIComponent(url.pathname || '/');
+    if (pathname === '/' || pathname === '') pathname = '/index.html';
+    // 防越权:strip 前导斜杠后用 path.join 拼,再确认结果还在 distDir 下
+    const safeRel = pathname.replace(/^\/+/, '');
+    const candidate = path.normalize(path.join(distDir, safeRel));
+    if (!candidate.startsWith(distDir)) {
+      return new Response('forbidden', { status: 403 });
+    }
+    // 静态资源(有 ext)→ 直接 serve,否则 SPA fallback 给 index.html
+    const hasExt = path.extname(safeRel) !== '';
+    if (hasExt && existsSync(candidate)) {
+      return net.fetch(pathToFileURL(candidate).toString());
+    }
+    const fallback = path.join(distDir, 'index.html');
+    if (existsSync(fallback)) {
+      return net.fetch(pathToFileURL(fallback).toString());
+    }
+    return new Response('not found', { status: 404 });
+  });
 }
 
 async function createWindow() {
@@ -58,10 +108,9 @@ async function createWindow() {
     await win.loadURL('http://localhost:5173');
     // DevTools 不自动开;⌘⌥I 手动呼出
   } else {
-    // Hono 在 packaged 模式下 serve dist/ + /api/*,renderer 走 http 同源
-    // serverHandle 已在 app.whenReady 里 await 出来
-    if (!serverHandle) throw new Error('Hono server not ready');
-    await win.loadURL(`http://127.0.0.1:${serverHandle.port}/`);
+    // packaged 模式:走 app:// 自定义协议加载,确保 origin 稳定(IndexedDB 不丢)
+    // 资源 fetch + SW 都在 app://workbench 这个 origin 下
+    await win.loadURL('app://workbench/');
   }
 
   win.on('closed', () => {
@@ -73,6 +122,13 @@ async function createWindow() {
 app.whenReady().then(async () => {
   // 注册所有 IPC handler(在 createWindow 之前 — preload 一启动就要能 invoke)
   registerIpc(() => mainWindow);
+
+  // 注册 app:// protocol handler(packaged 才用,dev 走 vite)
+  if (!IS_DEV) {
+    const distDir = path.join(__dirname, '..', 'dist');
+    registerAppProtocol(distDir);
+    console.log(`[electron] app:// protocol → ${distDir}`);
+  }
 
   // 起 Hono
   serverHandle = await bootHono();
