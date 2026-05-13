@@ -24,6 +24,22 @@ const __dirname = path.dirname(__filename);
 
 const IS_DEV = !app.isPackaged;
 
+// === 完全禁用 Electron / Chromium 的 OS Keychain 集成 ===
+//
+// Chromium 默认会用 OS 密钥库给 cookies / saved passwords / network 凭据加密:
+//   macOS:  Keychain  (会弹"想要使用钥匙串"密码框)
+//   Linux:  GNOME Keyring / KWallet
+//   Windows: DPAPI
+//
+// 我们是个独立 App,没保存用户密码,cookies 也不敏感(都是 dev token)。
+// 不需要 OS 级密钥库 — 用 basic 模式让 Chromium 把加密数据存 plain 文件,
+// 永远不弹任何系统钥匙串授权框。
+//
+// 必须在 app ready 之前 appendSwitch
+app.commandLine.appendSwitch('password-store', 'basic');
+// 关 Chromium 的 in-process safe storage 提示(部分版本会冒"chrome 想存密码"对话框)
+app.commandLine.appendSwitch('use-mock-keychain'); // macOS 上特别有效
+
 // === 注册 app:// custom protocol ===
 //
 // 为什么用 custom protocol(而不是 loadURL http://127.0.0.1:<port>):
