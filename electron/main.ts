@@ -14,7 +14,8 @@ import { app, BrowserWindow, ipcMain, protocol, net } from 'electron';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, cpSync } from 'node:fs';
+import { homedir } from 'node:os';
 // 嵌入式启动 Hono:server/index.ts 已被 refactor 成可 import
 import { startServer, type ServerHandle } from '../server/index.js';
 import { registerIpc, stopAllWatchers } from './ipc.js';
@@ -39,6 +40,35 @@ const IS_DEV = !app.isPackaged;
 app.commandLine.appendSwitch('password-store', 'basic');
 // 关 Chromium 的 in-process safe storage 提示(部分版本会冒"chrome 想存密码"对话框)
 app.commandLine.appendSwitch('use-mock-keychain'); // macOS 上特别有效
+
+// === 数据存储位置 → ~/.design ===
+//
+// Electron 默认 userData = ~/Library/Application Support/<productName>/(macOS),
+// 跟 Apple 推荐做法对齐但用户看不见 / 不方便清理。
+//
+// 我们改成 ~/.design,符合 dev 工具习惯(~/.claude / ~/.aws / ~/.docker)。
+// 改 userData 后,所有 Electron 自带数据(IndexedDB / Cookies / Cache / Local Storage)
+// 跟我们自己的(secrets.json / installation-id.txt)统一搬到新位置。
+//
+// 一次性迁移:启动时,如果旧默认位置有数据 + 新位置没数据,自动 copy 过去
+// (老用户升级到新版无缝过渡,旧目录保留不删,可手动清)
+{
+  const oldUserData = app.getPath('userData'); // setPath 之前 = 默认值
+  const newUserData = path.join(homedir(), '.design');
+  if (existsSync(oldUserData) && !existsSync(newUserData)) {
+    try {
+      mkdirSync(newUserData, { recursive: true });
+      cpSync(oldUserData, newUserData, { recursive: true });
+      console.log(`[migrate] userData 已迁移: ${oldUserData} → ${newUserData}`);
+    } catch (e) {
+      console.warn('[migrate] userData 迁移失败,新位置从空开始:', (e as Error).message);
+    }
+  } else if (!existsSync(newUserData)) {
+    mkdirSync(newUserData, { recursive: true });
+  }
+  app.setPath('userData', newUserData);
+  console.log(`[electron] userData → ${newUserData}`);
+}
 
 // === 注册 app:// custom protocol ===
 //
