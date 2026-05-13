@@ -31,23 +31,38 @@ export interface OAuthTokens {
 
 // === Provider 配置 ===
 //
-// Anthropic Console — client_id 是 Claude Code CLI 的公开 ID,被 opencode / cc-switch 复用
-// 注意:Anthropic 不正式支持第三方客户端用 OAuth,这是借用 Claude Code 凭据的 grey area
-// 用户必须有 Claude Pro / Team / Enterprise 订阅
+// 常量从 Claude Code 1.0.51 cli.js + Codex CLI Rust 源码 verified。改之前对照
+// 这些注释,别凭记忆改。
+//
+// Anthropic — Pro/Max 订阅走 claude.ai/oauth/authorize;Console API-key 流程走
+// console.anthropic.com/oauth/authorize。我们要订阅 token,所以用前者。
+// token endpoint 都是 console.anthropic.com/v1/oauth/token,body **必须 JSON**。
 const ANTHROPIC = {
-  authorizeUrl: 'https://console.anthropic.com/oauth/authorize',
+  authorizeUrl: 'https://claude.ai/oauth/authorize',
   tokenUrl: 'https://console.anthropic.com/v1/oauth/token',
   clientId: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
   scope: 'org:create_api_key user:profile user:inference',
+  callbackPort: 54545,
+  callbackPath: '/callback',
+  bodyFormat: 'json' as const,
 };
 
-// OpenAI Codex — ChatGPT 订阅登录,被 codex-cli / opencode 使用
-// client_id 是 codex 公开 ID
+// OpenAI Codex (ChatGPT 订阅) — 各种参数都比 Anthropic 严
+//   - redirect path 必须 /auth/callback(不是 /callback)
+//   - scope 必须含 api.connectors.read api.connectors.invoke
+//   - 必须带 id_token_add_organizations=true 和 codex_cli_simplified_flow=true
+//   - originator=codex_cli_rs(server 看的)
+//   - 端口 1455 写死,被占了 fallback 到 1457(Codex 自己也只允许这俩)
+//   - token endpoint body **是 form-urlencoded**(不像 anthropic 用 JSON)
 const OPENAI = {
   authorizeUrl: 'https://auth.openai.com/oauth/authorize',
   tokenUrl: 'https://auth.openai.com/oauth/token',
   clientId: 'app_EMoamEEZ73f0CkXaXp7hrann',
-  scope: 'openid profile email offline_access',
+  scope: 'openid profile email offline_access api.connectors.read api.connectors.invoke',
+  callbackPort: 1455,
+  fallbackPort: 1457,
+  callbackPath: '/auth/callback',
+  bodyFormat: 'form' as const,
 };
 
 const KEYCHAIN_ANTHROPIC = 'oauth:anthropic';
@@ -100,7 +115,12 @@ async function findPortHolder(port: number): Promise<string> {
   }
 }
 
-function listenForCallback(port: number, expectedState: string, timeoutMs = 5 * 60_000): Promise<CallbackResult> {
+function listenForCallback(
+  port: number,
+  callbackPath: string,
+  expectedState: string,
+  timeoutMs = 5 * 60_000,
+): Promise<CallbackResult> {
   return new Promise((resolve, reject) => {
     let server: Server | null = null;
     let timer: NodeJS.Timeout | null = null;
@@ -118,7 +138,7 @@ function listenForCallback(port: number, expectedState: string, timeoutMs = 5 * 
     server = createServer((req, res) => {
       try {
         const u = new URL(req.url || '/', `http://localhost:${port}`);
-        if (u.pathname !== '/callback') {
+        if (u.pathname !== callbackPath) {
           res.statusCode = 404;
           res.end('not found');
           return;
@@ -167,7 +187,7 @@ function listenForCallback(port: number, expectedState: string, timeoutMs = 5 * 
     });
 
     server.listen(port, '127.0.0.1', () => {
-      console.log(`[oauth] callback server listening on http://127.0.0.1:${port}/callback`);
+      console.log(`[oauth] callback server listening on http://127.0.0.1:${port}${callbackPath}`);
     });
     server.on('error', (err) => {
       close();
@@ -183,43 +203,47 @@ function escapeHtml(s: string): string {
 // === 主流程 ===
 async function runOAuthFlow(opts: {
   authorizeUrl: string;
-  tokenUrl: string;
   clientId: string;
   scope: string;
   callbackPort: number;
-  /** true = 这个端口在 OpenAI 注册时写死了,占用时报错让用户处理;
-   *  false = 可以 fallback 到附近空闲端口 */
-  portStrict: boolean;
+  /** 注册的 fallback 端口(允许的备用,例如 Codex 用 1457);undefined = 不允许 fallback */
+  fallbackPort?: number;
+  callbackPath: string;
+  /** 额外加在 authorize URL 上的 query params(provider 各自有 quirks) */
+  extraParams?: Record<string, string>;
 }): Promise<{ code: string; verifier: string; actualPort: number }> {
-  // 先探测端口
+  // 端口探测:首选端口 → 备用端口(如允许)→ 否则报错
   let port = opts.callbackPort;
   if (!(await isPortFree(port))) {
-    if (opts.portStrict) {
-      const holder = await findPortHolder(port);
-      const hint = holder
-        ? `占用进程:${holder}。终端跑 \`kill ${holder.match(/PID (\d+)/)?.[1] ?? ''}\` 释放后再试。`
-        : `终端跑 \`lsof -i :${port}\` 查占用进程,kill 掉再重试。`;
-      throw new Error(
-        `端口 ${port} 已被占用。OpenAI Codex OAuth 要求严格使用此端口(在 client_id 处注册),不能换。\n${hint}\n常见原因:你已经登录过 Codex CLI 并且它的后台进程还在,或者上一次登录没干净退出。`
-      );
-    }
-    // 非 strict:找下一个空闲端口
-    for (let p = port + 1; p < port + 20; p++) {
-      if (await isPortFree(p)) {
-        port = p;
-        console.warn(`[oauth] 端口 ${opts.callbackPort} 被占用,fallback 到 ${p}`);
-        break;
-      }
-    }
-    if (port === opts.callbackPort) {
-      throw new Error(`端口 ${port}~${port + 19} 全被占用,无法启动 callback server`);
+    if (opts.fallbackPort && (await isPortFree(opts.fallbackPort))) {
+      port = opts.fallbackPort;
+      console.warn(`[oauth] 端口 ${opts.callbackPort} 被占用,fallback 到 ${port}`);
+    } else {
+      // 全占了 → 找占用者 + 详细错误
+      const holder = await findPortHolder(opts.callbackPort);
+      const fallbackHolder = opts.fallbackPort ? await findPortHolder(opts.fallbackPort) : '';
+      const pid = holder.match(/PID (\d+)/)?.[1];
+      const lines: string[] = [
+        `端口 ${opts.callbackPort}${opts.fallbackPort ? ` 和备用端口 ${opts.fallbackPort}` : ''} 被占用,无法启动 OAuth callback server。`,
+        `OAuth 提供方在 client_id 处注册了固定端口,我们不能换其他端口。`,
+        '',
+        holder ? `占用 :${opts.callbackPort} 的进程:${holder}` : '',
+        fallbackHolder ? `占用 :${opts.fallbackPort} 的进程:${fallbackHolder}` : '',
+        '',
+        pid
+          ? `修复方式:终端跑 \`kill ${pid}\`(必要时 \`kill -9 ${pid}\`),然后重试登录。`
+          : `修复方式:终端跑 \`lsof -i :${opts.callbackPort}\` 找出进程后 kill。`,
+        '',
+        `常见原因:已经在跑 Codex / Claude Code CLI;或上一次登录没干净退出。`,
+      ].filter(Boolean);
+      throw new Error(lines.join('\n'));
     }
   }
 
   const verifier = generateVerifier();
   const challenge = generateChallenge(verifier);
   const state = base64url(randomBytes(16));
-  const redirectUri = `http://localhost:${port}/callback`;
+  const redirectUri = `http://localhost:${port}${opts.callbackPath}`;
 
   const params = new URLSearchParams({
     response_type: 'code',
@@ -229,15 +253,32 @@ async function runOAuthFlow(opts: {
     state,
     code_challenge: challenge,
     code_challenge_method: 'S256',
+    ...(opts.extraParams ?? {}),
   });
   const url = `${opts.authorizeUrl}?${params.toString()}`;
 
   console.log('[oauth] opening browser →', url);
-  const callbackPromise = listenForCallback(port, state);
+  const callbackPromise = listenForCallback(port, opts.callbackPath, state);
   await shell.openExternal(url);
 
   const { code } = await callbackPromise;
   return { code, verifier, actualPort: port };
+}
+
+/** body 编码模式 — Anthropic 要 JSON,Codex 要 form-urlencoded */
+type BodyFormat = 'json' | 'form';
+
+function encodeBody(format: BodyFormat, fields: Record<string, string>): {
+  body: string;
+  contentType: string;
+} {
+  if (format === 'json') {
+    return { body: JSON.stringify(fields), contentType: 'application/json' };
+  }
+  return {
+    body: new URLSearchParams(fields).toString(),
+    contentType: 'application/x-www-form-urlencoded',
+  };
 }
 
 async function exchangeCode(opts: {
@@ -245,19 +286,24 @@ async function exchangeCode(opts: {
   clientId: string;
   code: string;
   verifier: string;
-  callbackPort: number;
+  redirectUri: string;
+  bodyFormat: BodyFormat;
+  state?: string; // Anthropic 要求一起 echo back,Codex 不需要
 }): Promise<{ access_token: string; refresh_token: string; id_token?: string; expires_in?: number }> {
-  const body = new URLSearchParams({
+  const fields: Record<string, string> = {
     grant_type: 'authorization_code',
     client_id: opts.clientId,
     code: opts.code,
-    redirect_uri: `http://localhost:${opts.callbackPort}/callback`,
+    redirect_uri: opts.redirectUri,
     code_verifier: opts.verifier,
-  });
+  };
+  if (opts.state) fields.state = opts.state;
+
+  const { body, contentType } = encodeBody(opts.bodyFormat, fields);
   const res = await fetch(opts.tokenUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: body.toString(),
+    headers: { 'Content-Type': contentType, Accept: 'application/json' },
+    body,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -270,16 +316,17 @@ async function refreshAccessToken(opts: {
   tokenUrl: string;
   clientId: string;
   refreshToken: string;
+  bodyFormat: BodyFormat;
 }): Promise<{ access_token: string; refresh_token?: string; expires_in?: number }> {
-  const body = new URLSearchParams({
+  const { body, contentType } = encodeBody(opts.bodyFormat, {
     grant_type: 'refresh_token',
     client_id: opts.clientId,
     refresh_token: opts.refreshToken,
   });
   const res = await fetch(opts.tokenUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: body.toString(),
+    headers: { 'Content-Type': contentType, Accept: 'application/json' },
+    body,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -291,19 +338,21 @@ async function refreshAccessToken(opts: {
 // === Public API ===
 
 export async function loginAnthropic(): Promise<OAuthTokens> {
-  // Anthropic Console 的 redirect_uri 不严格,占用了就换一个端口
   const { code, verifier, actualPort } = await runOAuthFlow({
     authorizeUrl: ANTHROPIC.authorizeUrl,
-    tokenUrl: ANTHROPIC.tokenUrl,
     clientId: ANTHROPIC.clientId,
     scope: ANTHROPIC.scope,
-    callbackPort: 54321,
-    portStrict: false,
+    callbackPort: ANTHROPIC.callbackPort,
+    callbackPath: ANTHROPIC.callbackPath,
+    // Claude Code cli 在 URL 上额外带 code=true
+    extraParams: { code: 'true' },
   });
+  const redirectUri = `http://localhost:${actualPort}${ANTHROPIC.callbackPath}`;
   const tok = await exchangeCode({
     tokenUrl: ANTHROPIC.tokenUrl,
     clientId: ANTHROPIC.clientId,
-    code, verifier, callbackPort: actualPort,
+    code, verifier, redirectUri,
+    bodyFormat: ANTHROPIC.bodyFormat,
   });
   const tokens: OAuthTokens = {
     accessToken: tok.access_token,
@@ -317,19 +366,26 @@ export async function loginAnthropic(): Promise<OAuthTokens> {
 }
 
 export async function loginOpenAI(): Promise<OAuthTokens> {
-  // Codex CLI 在 OpenAI 注册的 redirect_uri 严格写死 1455,不能 fallback
   const { code, verifier, actualPort } = await runOAuthFlow({
     authorizeUrl: OPENAI.authorizeUrl,
-    tokenUrl: OPENAI.tokenUrl,
     clientId: OPENAI.clientId,
     scope: OPENAI.scope,
-    callbackPort: 1455,
-    portStrict: true,
+    callbackPort: OPENAI.callbackPort,
+    fallbackPort: OPENAI.fallbackPort, // 1455 占了用 1457
+    callbackPath: OPENAI.callbackPath,
+    extraParams: {
+      // Codex CLI 必传的 quirky 参数,server 真的会校验
+      id_token_add_organizations: 'true',
+      codex_cli_simplified_flow: 'true',
+      originator: 'codex_cli_rs',
+    },
   });
+  const redirectUri = `http://localhost:${actualPort}${OPENAI.callbackPath}`;
   const tok = await exchangeCode({
     tokenUrl: OPENAI.tokenUrl,
     clientId: OPENAI.clientId,
-    code, verifier, callbackPort: actualPort,
+    code, verifier, redirectUri,
+    bodyFormat: OPENAI.bodyFormat,
   });
   const tokens: OAuthTokens = {
     accessToken: tok.access_token,
@@ -367,6 +423,7 @@ export async function getAccessToken(provider: 'anthropic' | 'openai'): Promise<
       tokenUrl: cfg.tokenUrl,
       clientId: cfg.clientId,
       refreshToken: t.refreshToken,
+      bodyFormat: cfg.bodyFormat,
     });
     const account = provider === 'anthropic' ? KEYCHAIN_ANTHROPIC : KEYCHAIN_OPENAI;
     const next: OAuthTokens = {
