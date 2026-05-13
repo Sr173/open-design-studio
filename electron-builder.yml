@@ -53,4 +53,32 @@ dmg:
       type: link
       path: /Applications
 
+# ───────── Windows ─────────
+win:
+  target:
+    # NSIS — 标准 .exe 安装器,用户熟悉
+    - target: nsis
+      arch:
+        - x64
+        - arm64
+    # Portable — 单文件免安装版,绿色软件,适合 U 盘 / 临时使用
+    - target: portable
+      arch:
+        - x64
+  # 没买代码签名证书,Windows SmartScreen 会拦,用户首次需点"仍要运行"
+  # 跟 macOS 没 Apple Developer 证书一样的处理
+
+nsis:
+  # 让用户自选安装目录(默认 C:\Users\<user>\AppData\Local\Programs\<App>)
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false  # per-user 安装,不需要管理员权限
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Open Design Studio
+  artifactName: Open-Design-Studio-Setup-${version}-${arch}.${ext}
+
+portable:
+  artifactName: Open-Design-Studio-Portable-${version}-${arch}.${ext}
+
 # afterPack hook 可以用来 strip 不必要的 locale 等,先不用
