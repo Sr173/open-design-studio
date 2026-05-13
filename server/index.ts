@@ -40,11 +40,12 @@ export interface StartServerOptions {
   authToken?: string;
   /** 覆盖 provider 配置;Electron 模式下从 keychain / IPC 传入 */
   providerConfig?: {
-    provider: 'anthropic' | 'openai' | 'gemini';
+    provider: 'anthropic' | 'openai' | 'gemini' | 'codex';
     apiKey: string;
     model: string;
     baseUrl?: string;
     authMode?: 'apikey' | 'oauth';
+    accountId?: string;
   };
   /** 把 dist/ 静态文件挂到根路径上;Electron packaged 模式用 — renderer loadURL 到本 server */
   serveStaticDir?: string;
@@ -58,7 +59,7 @@ export interface ServerHandle {
 
 // === 配置 — 从 env 读默认值,可被 startServer options 覆盖 ===
 const defaultConfig: ServerConfig = {
-  provider: (process.env.PROVIDER as 'anthropic' | 'openai' | 'gemini') || 'openai',
+  provider: (process.env.PROVIDER as 'anthropic' | 'openai' | 'gemini' | 'codex') || 'openai',
   model: process.env.MODEL || 'gpt-5.5',
   baseUrl: process.env.BASE_URL || undefined,
   port: Number(process.env.PORT) || 5174,
@@ -79,11 +80,13 @@ let provider: LLMProvider | null = defaultApiKey
 
 /** 运行时切换 provider — Electron 改 .env / 改 key 时调 */
 export function updateProvider(cfg: {
-  provider: 'anthropic' | 'openai' | 'gemini';
+  provider: 'anthropic' | 'openai' | 'gemini' | 'codex';
   apiKey: string;
   model: string;
   baseUrl?: string;
   authMode?: 'apikey' | 'oauth';
+  accountId?: string;
+  installationId?: string;
 }) {
   config = { ...config, provider: cfg.provider, model: cfg.model, baseUrl: cfg.baseUrl };
   provider = createProvider(cfg);

@@ -13,6 +13,7 @@ import * as fsService from './services/fs.js';
 import * as gitService from './services/git.js';
 import * as keychainService from './services/keychain.js';
 import * as oauthService from './services/oauth.js';
+import { getInstallationId } from './services/installationId.js';
 import {
   startWatcher,
   stopWatcher,
@@ -108,7 +109,7 @@ export function registerIpc(getMainWindow: () => BrowserWindow | null) {
     async (
       _e,
       cfg: {
-        provider: 'anthropic' | 'openai' | 'gemini';
+        provider: 'anthropic' | 'openai' | 'gemini' | 'codex';
         account: string; // keychain account 名(或 'oauth:anthropic' / 'oauth:openai-codex')
         model: string;
         baseUrl?: string;
@@ -121,12 +122,22 @@ export function registerIpc(getMainWindow: () => BrowserWindow | null) {
         if (!oauthProvider) throw new Error(`unknown oauth account: ${cfg.account}`);
         const token = await oauthService.getAccessToken(oauthProvider);
         if (!token) throw new Error(`OAuth ${oauthProvider} 未登录或 refresh 失败 — 去设置面板登录`);
+        // Codex 还要 chatgpt_account_id 才能调 backend-api
+        const accountId =
+          cfg.provider === 'codex' ? await oauthService.getAccountId(oauthProvider) : undefined;
+        if (cfg.provider === 'codex' && !accountId) {
+          throw new Error(
+            'Codex 登录缺 chatgpt_account_id(id_token JWT 里没找到 auth.chatgpt_account_id claim)。请退出 ChatGPT 重新订阅登录。'
+          );
+        }
         updateProvider({
           provider: cfg.provider,
           apiKey: token,
           model: cfg.model,
           baseUrl: cfg.baseUrl,
           authMode: 'oauth',
+          accountId: accountId ?? undefined,
+          installationId: cfg.provider === 'codex' ? getInstallationId() : undefined,
         });
         return { ok: true };
       }

@@ -3,7 +3,7 @@
  * 每个 preset:
  *  - id:稳定 key,UI 存这个
  *  - label:下拉显示
- *  - provider:走哪个 SDK ('anthropic' | 'openai' | 'gemini')
+ *  - provider:走哪个 SDK ('anthropic' | 'openai' | 'gemini' | 'codex')
  *  - baseUrl:auto-fill 进 Settings(可被用户覆盖)
  *  - models:推荐 model list(下拉)+ "custom..." 兜底
  *  - notes:UI 副标题提示
@@ -11,7 +11,7 @@
  * 用户选 `custom-gateway` → 全字段自填(任何 CRS / sub2api / 自建网关)
  */
 
-export type LLMProvider = 'anthropic' | 'openai' | 'gemini';
+export type LLMProvider = 'anthropic' | 'openai' | 'gemini' | 'codex';
 
 export interface ProviderPreset {
   id: string;
@@ -41,12 +41,12 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
   {
     id: 'openai-oauth-codex',
-    label: 'ChatGPT (订阅登录 · Codex OAuth)',
-    provider: 'openai',
-    // Codex 走的是 ChatGPT 后端,baseURL 与官方 API 不同
+    label: 'ChatGPT (订阅登录 · Codex)',
+    provider: 'codex',
+    // Codex 走的是 ChatGPT 后端 Responses API,跟 OpenAI 官方 API 完全不同
     baseUrl: 'https://chatgpt.com/backend-api/codex',
-    models: ['gpt-5', 'gpt-5-codex'],
-    notes: '用 ChatGPT Plus / Team 订阅,走 Codex CLI 凭据(实验)',
+    models: ['gpt-5-codex', 'gpt-5'],
+    notes: '用 ChatGPT Plus / Team 订阅,走 Codex CLI Responses API',
     category: 'official',
   },
 
@@ -250,5 +250,7 @@ export function inferPresetIdFromConfig(
     if (p.baseUrl === baseUrl) return p.id;
   }
   // 没匹配 → custom
-  return provider === 'anthropic' ? 'custom-anthropic' : 'custom-openai';
+  if (provider === 'anthropic') return 'custom-anthropic';
+  if (provider === 'codex') return 'openai-oauth-codex';
+  return 'custom-openai';
 }

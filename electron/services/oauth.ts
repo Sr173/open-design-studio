@@ -26,7 +26,41 @@ export interface OAuthTokens {
   idToken?: string;
   expiresAt: number; // ms epoch
   accountEmail?: string;
+  /** Codex 专用:从 id_token JWT 解出来的 chatgpt_account_id,要塞 ChatGPT-Account-ID header */
+  accountId?: string;
   provider: 'anthropic' | 'openai';
+}
+
+/** 解 JWT payload(不验签,只读 claims)。无效返回 null。 */
+function decodeJwtPayload(jwt: string): Record<string, any> | null {
+  try {
+    const parts = jwt.split('.');
+    if (parts.length < 2) return null;
+    // base64url → base64,补 padding
+    let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (payload.length % 4) payload += '=';
+    const json = Buffer.from(payload, 'base64').toString('utf8');
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+/** Codex 的 chatgpt_account_id 在 id_token claim "https://api.openai.com/auth" 里 */
+function extractChatGPTAccountId(idToken: string): string | null {
+  const claims = decodeJwtPayload(idToken);
+  if (!claims) return null;
+  const auth = claims['https://api.openai.com/auth'];
+  if (auth && typeof auth === 'object' && typeof auth.chatgpt_account_id === 'string') {
+    return auth.chatgpt_account_id;
+  }
+  return null;
+}
+
+function extractEmail(idToken: string): string | null {
+  const claims = decodeJwtPayload(idToken);
+  if (!claims) return null;
+  return typeof claims.email === 'string' ? claims.email : null;
 }
 
 // === Provider 配置 ===
@@ -387,12 +421,22 @@ export async function loginOpenAI(): Promise<OAuthTokens> {
     code, verifier, redirectUri,
     bodyFormat: OPENAI.bodyFormat,
   });
+  // 从 id_token JWT 解出 chatgpt_account_id(Codex 后端 ChatGPT-Account-ID header 必传)
+  const accountId = tok.id_token ? extractChatGPTAccountId(tok.id_token) : null;
+  const email = tok.id_token ? extractEmail(tok.id_token) : null;
+  if (!accountId) {
+    console.warn('[oauth] 没在 id_token 里找到 chatgpt_account_id — Codex 后端可能拒绝');
+  } else {
+    console.log(`[oauth] codex account_id = ${accountId.slice(0, 8)}... email = ${email ?? '?'}`);
+  }
   const tokens: OAuthTokens = {
     accessToken: tok.access_token,
     refreshToken: tok.refresh_token,
     idToken: tok.id_token,
     expiresAt: Date.now() + ((tok.expires_in ?? 3600) * 1000),
     provider: 'openai',
+    accountId: accountId ?? undefined,
+    accountEmail: email ?? undefined,
   };
   await setKey(KEYCHAIN_OPENAI, JSON.stringify(tokens));
   console.log('[oauth] openai (codex) login success');
@@ -408,6 +452,12 @@ export async function getStoredTokens(provider: 'anthropic' | 'openai'): Promise
   } catch {
     return null;
   }
+}
+
+/** 拿到 OAuth 关联的 accountId(Codex 用),不会 refresh */
+export async function getAccountId(provider: 'anthropic' | 'openai'): Promise<string | null> {
+  const t = await getStoredTokens(provider);
+  return t?.accountId ?? null;
 }
 
 /** 拿到一个仍有效的 access token,自动 refresh */

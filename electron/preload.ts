@@ -158,7 +158,7 @@ const native = {
   // === provider 切换 ===
   provider: {
     update(cfg: {
-      provider: 'anthropic' | 'openai' | 'gemini';
+      provider: 'anthropic' | 'openai' | 'gemini' | 'codex';
       account: string;
       model: string;
       baseUrl?: string;
